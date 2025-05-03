@@ -1,17 +1,18 @@
-# In tests/test_openwebui_cog.py
+# ./tests/test_openwebui_cog.py
+
 import pytest
 import discord.ext.commands as commands
 import asyncio
 import json
 from unittest.mock import Mock, patch, AsyncMock
 
-# Import your cog
+# Import the cog from the correct path
 from cogs.openwebui_cog import OpenWebUICog
 
 class TestOpenWebUICog:
     @pytest.fixture
     async def bot(self):
-        # Create a mock bot
+        """Create a mock bot for testing."""
         mock_bot = AsyncMock(spec=commands.Bot)
         mock_bot.config = {
             "OPENWEBUI_API_URL": "http://test.server",
@@ -22,18 +23,19 @@ class TestOpenWebUICog:
     
     @pytest.fixture
     async def cog(self, bot):
-        # Create an instance of your cog
+        """Create an instance of the cog for testing."""
         cog = OpenWebUICog(bot)
         return cog
     
     @pytest.mark.asyncio
     async def test_init(self, cog, bot):
-        # Test initialization
+        """Test initialization."""
         assert cog.api_base_url == "http://test.server"
         assert cog.default_model == "test-model"
         
     @pytest.mark.asyncio
     async def test_perform_api_request_success(self, cog, bot):
+        """Test the _perform_api_request method with a successful response."""
         # Mock the aiohttp ClientSession
         mock_response = AsyncMock()
         mock_response.status = 200
@@ -58,6 +60,7 @@ class TestOpenWebUICog:
     
     @pytest.mark.asyncio
     async def test_send_prompt_to_api(self, cog, bot):
+        """Test the send_prompt_to_api method."""
         # Mock the _perform_api_request method
         mock_result = (200, {
             "choices": [{"message": {"content": "Test response"}}]
@@ -70,11 +73,13 @@ class TestOpenWebUICog:
             assert result["content"] == "Test response"
             assert result["endpoint"] == cog.api_endpoint
 
-# In tests/conftest.py
+
+# Configuration files for pytest
+"""
+# ./tests/conftest.py
 # Common fixtures and setup
 
-# Create a pytest.ini file
-"""
+# ./pytest.ini
 [pytest]
 asyncio_mode = auto
 testpaths = tests
@@ -83,8 +88,9 @@ python_classes = Test*
 python_functions = test_*
 """
 
-# In requirements-dev.txt - Add development dependencies
+# Development dependencies
 """
+# ./requirements-dev.txt
 pytest>=7.0.0
 pytest-asyncio>=0.18.0
 pytest-cov>=3.0.0

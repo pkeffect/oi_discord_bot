@@ -1,14 +1,40 @@
-# In cogs/help_cog.py - Create a custom help system
+# ./cogs/help_cog.py
+
+import discord
+from discord.ext import commands
+from discord.ext.commands import Context
+import logging
+
+# Set up logger for this cog
+logger = logging.getLogger(__name__)
 
 class HelpCog(commands.Cog, name="Help"):
-    def __init__(self, bot):
+    """
+    Custom help command system with categories and examples.
+    Replaces the default help command with a more detailed version.
+    """
+    
+    def __init__(self, bot: commands.Bot):
+        """
+        Initialize the Help cog.
+        
+        Args:
+            bot: The bot instance
+        """
         self.bot = bot
         # Remove the default help command
         self.bot.remove_command('help')
+        logger.info("HelpCog loaded. Default help command removed.")
         
     @commands.group(invoke_without_command=True)
-    async def help(self, ctx, *, command_name=None):
-        """Improved help command with categories and examples."""
+    async def help(self, ctx: Context, *, command_name: str = None):
+        """
+        Improved help command with categories and examples.
+        
+        Args:
+            ctx: The command context
+            command_name: Optional command or category name to get help for
+        """
         prefix = ctx.prefix
         
         if command_name is None:
@@ -64,8 +90,15 @@ class HelpCog(commands.Cog, name="Help"):
                 
             await self.send_command_help(ctx, command)
     
-    async def send_category_help(self, ctx, category_id, category_name):
-        """Send help for a specific category."""
+    async def send_category_help(self, ctx: Context, category_id: str, category_name: str):
+        """
+        Send help for a specific category.
+        
+        Args:
+            ctx: The command context
+            category_id: The category identifier
+            category_name: The display name of the category
+        """
         prefix = ctx.prefix
         embed = discord.Embed(
             title=f"{category_name} Commands",
@@ -83,7 +116,23 @@ class HelpCog(commands.Cog, name="Help"):
                 ("docs", "Search documentation", f"`{prefix}docs installation`\n`{prefix}docs api reference`"),
                 ("syncdocs", "Manually sync docs (admin)", f"`{prefix}syncdocs`"),
             ],
-            # Add other categories...
+            "modelsearch": [
+                ("osearch", "Search for Ollama models", f"`{prefix}osearch llama`\n`{prefix}osearch mistral`"),
+            ],
+            "media": [
+                ("youtube", "Search YouTube", f"`{prefix}youtube openwebui tutorial`"),
+                ("yt", "Shorthand for YouTube search", f"`{prefix}yt openwebui tutorial`"),
+            ],
+            "utility": [
+                ("ping", "Check bot latency", f"`{prefix}ping`"),
+                ("welcome", "Show bot introduction", f"`{prefix}welcome`"),
+            ],
+            "admin": [
+                ("set_api_key", "Set OpenWebUI API key", f"`{prefix}set_api_key <key>`"),
+                ("set_jwt_token", "Set OpenWebUI JWT token", f"`{prefix}set_jwt_token <token>`"),
+                ("debug_env", "Show environment config", f"`{prefix}debug_env`"),
+                ("reload_logger_config", "Reload channel logger config", f"`{prefix}reload_logger_config`"),
+            ],
         }
         
         # Get commands for this category
@@ -101,8 +150,14 @@ class HelpCog(commands.Cog, name="Help"):
                 
         await ctx.send(embed=embed)
     
-    async def send_command_help(self, ctx, command):
-        """Send help for a specific command."""
+    async def send_command_help(self, ctx: Context, command: commands.Command):
+        """
+        Send help for a specific command.
+        
+        Args:
+            ctx: The command context
+            command: The command object to get help for
+        """
         prefix = ctx.prefix
         
         embed = discord.Embed(
@@ -132,7 +187,17 @@ class HelpCog(commands.Cog, name="Help"):
             "ask": f"`{prefix}ask What is OpenWebUI?`\n`{prefix}ask llama3:latest Explain quantum computing`",
             "docs": f"`{prefix}docs installation`\n`{prefix}docs api reference`",
             "osearch": f"`{prefix}osearch llama`\n`{prefix}osearch mistral`",
-            # Add more examples for each command
+            "youtube": f"`{prefix}youtube openwebui tutorial`\n`{prefix}youtube how to setup ollama`",
+            "yt": f"`{prefix}yt openwebui tutorial`\n`{prefix}yt how to setup ollama`",
+            "ping": f"`{prefix}ping`",
+            "welcome": f"`{prefix}welcome`",
+            "set_api_key": f"`{prefix}set_api_key YOUR_API_KEY`",
+            "set_jwt_token": f"`{prefix}set_jwt_token YOUR_JWT_TOKEN`",
+            "debug_env": f"`{prefix}debug_env`",
+            "openwebui_models": f"`{prefix}openwebui_models`",
+            "diagnose_api": f"`{prefix}diagnose_api`",
+            "syncdocs": f"`{prefix}syncdocs`",
+            "reload_logger_config": f"`{prefix}reload_logger_config`",
         }
         
         if command.name in examples:
@@ -140,5 +205,13 @@ class HelpCog(commands.Cog, name="Help"):
             
         await ctx.send(embed=embed)
 
-async def setup(bot):
+
+async def setup(bot: commands.Bot):
+    """
+    Load the HelpCog into the bot.
+    
+    Args:
+        bot: The bot instance
+    """
     await bot.add_cog(HelpCog(bot))
+    logger.info("HelpCog added to bot.")
