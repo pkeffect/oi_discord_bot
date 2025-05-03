@@ -412,13 +412,30 @@ class DocumentationCog(commands.Cog, name="Documentation"):
         Returns:
             str: Extracted heading content
         """
-        if max_level:
-            pattern = '|'.join([f"^{'#' * l}\\s+(.*?)$" for l in range(level, max_level + 1)])
-        else:
-            pattern = f"^{'#' * level}\\s+(.*?)$"
-        
-        matches = re.findall(pattern, content, re.MULTILINE)
-        return ' '.join(matches)
+        try:
+            if max_level:
+                pattern = '|'.join([f"^{'#' * l}\\s+(.*?)$" for l in range(level, max_level + 1)])
+            else:
+                pattern = f"^{'#' * level}\\s+(.*?)$"
+            
+            matches = re.findall(pattern, content, re.MULTILINE)
+            
+            # FIX: Handle both string and tuple results from re.findall
+            if matches and isinstance(matches[0], tuple):
+                # If matches contains tuples, extract the first non-empty group from each tuple
+                extracted = []
+                for match in matches:
+                    for group in match:
+                        if group:  # Use the first non-empty group
+                            extracted.append(group)
+                            break
+                return ' '.join(extracted)
+            else:
+                # If matches contains strings, join them directly
+                return ' '.join(matches)
+        except Exception as e:
+            logger.warning(f"Error extracting heading content at level {level}: {e}")
+            return ""
     
     def _extract_bold_content(self, content: str) -> str:
         """
@@ -430,11 +447,29 @@ class DocumentationCog(commands.Cog, name="Documentation"):
         Returns:
             str: Extracted bold content
         """
-        # Match both **bold** and __bold__ formats
-        bold_pattern = r'\*\*(.*?)\*\*|__(.*?)__'
-        matches = re.findall(bold_pattern, content)
-        # Each match is a tuple with two groups
-        return ' '.join(match[0] or match[1] for match in matches)
+        try:
+            # Match both **bold** and __bold__ formats
+            bold_pattern = r'\*\*(.*?)\*\*|__(.*?)__'
+            matches = re.findall(bold_pattern, content)
+            
+            # Each match is a tuple with two groups
+            # FIX: Handle empty groups more safely
+            result = []
+            for match in matches:
+                if isinstance(match, tuple):
+                    # Find the first non-empty group
+                    for group in match:
+                        if group:
+                            result.append(group)
+                            break
+                else:
+                    # Direct string match
+                    result.append(match)
+            
+            return ' '.join(result)
+        except Exception as e:
+            logger.warning(f"Error extracting bold content: {e}")
+            return ""
     
     def _clean_markdown(self, content: str) -> str:
         """
@@ -446,25 +481,29 @@ class DocumentationCog(commands.Cog, name="Documentation"):
         Returns:
             str: Cleaned content
         """
-        # Remove code blocks
-        content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
-        
-        # Remove inline code
-        content = re.sub(r'`.*?`', '', content)
-        
-        # Remove links but keep text
-        content = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', content)
-        
-        # Remove images
-        content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
-        
-        # Remove HTML tags
-        content = re.sub(r'<.*?>', '', content)
-        
-        # Remove multiple spaces and newlines
-        content = re.sub(r'\s+', ' ', content).strip()
-        
-        return content
+        try:
+            # Remove code blocks
+            content = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
+            
+            # Remove inline code
+            content = re.sub(r'`.*?`', '', content)
+            
+            # Remove links but keep text
+            content = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', content)
+            
+            # Remove images
+            content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+            
+            # Remove HTML tags
+            content = re.sub(r'<.*?>', '', content)
+            
+            # Remove multiple spaces and newlines
+            content = re.sub(r'\s+', ' ', content).strip()
+            
+            return content
+        except Exception as e:
+            logger.warning(f"Error cleaning markdown: {e}")
+            return content  # Return original content if cleaning fails
     
     async def search_documentation(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """

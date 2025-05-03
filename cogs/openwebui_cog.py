@@ -1324,8 +1324,9 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                     payload = None
                     # Use appropriate method/payload for chat endpoint test
                     is_chat_endpoint = "chat" in endpoint.lower()
-                    if is_chat_endpoint:
-method = "POST"
+                    
+                        if is_chat_endpoint:
+                           method = "POST"
                         # Use default model if set, otherwise a placeholder that *might* fail but tests the endpoint
                         test_model = self.default_model or "test-model-for-diag"
                         payload = {"model": test_model, "messages": [{"role": "user", "content": "ping"}], "stream": False}
