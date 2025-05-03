@@ -1,6 +1,6 @@
 # 🤖 Monolith Discord Bot for OpenWebUI
 
-A Discord bot for the OpenWebUI community, providing LLM interactions, documentation search, model discovery, and more.
+A Discord bot for the OpenWebUI community, providing LLM interactions, documentation search, model discovery, and more. This is a proof-of-concept and working fully at the moment. This is not intended to be the final version as using ones own local models for chat responses would easily get out of hand even with throttling and cooldowns. So take that functionality with a grain of salt, it may stay in as a proxy itself for anything that is connected to your Open WebUI deployment (ie openrouter api, llm studio ect). I hope this helps anyone trying to create their own implementation for a discord bot. Pull requests are welcome.
 
 ## 📋 Features
 
