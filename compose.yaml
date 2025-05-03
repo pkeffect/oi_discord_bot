@@ -1,0 +1,30 @@
+# https://www.yamllint.com/ - YAML Validator
+# https://docs.docker.com/compose/ - Docker Compose
+
+services:
+  monolith-discord-bot:
+    container_name: monolith-discord-bot
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app  # Mounts the current directory to /app in the container
+    environment:
+      - 'DISCORD_TOKEN=${DISCORD_TOKEN}'
+      - 'DOCS_ZIP_URL=${DOCS_ZIP_URL}'
+      - 'DOCS_BASE_URL=${DOCS_BASE_URL}'
+      - 'DOCS_SUBDIR_IN_ZIP=${DOCS_SUBDIR_IN_ZIP}'
+      - 'OPENWEBUI_API_URL=${OPENWEBUI_API_URL}'
+      - 'OPENWEBUI_DEFAULT_MODEL=${OPENWEBUI_DEFAULT_MODEL}'
+      - 'OPENWEBUI_API_KEY=${OPENWEBUI_API_KEY}'
+      - 'OPENWEBUI_JWT_TOKEN=${OPENWEBUI_JWT_TOKEN}'
+      - 'OLLAMA_API_URL=${OLLAMA_API_URL}'
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"    
+    networks:
+      - "hyperspace" 
+      
+networks:
+  hyperspace:
+    external: true    
