@@ -8,6 +8,7 @@ A Discord bot for the OpenWebUI community, providing LLM interactions, documenta
 - **!ask [model] \<prompt>** - Send prompts to an LLM through OpenWebUI
 - **!openwebui_models** - List all available models from your OpenWebUI instance
 - **!diagnose_api** - Run diagnostics on the OpenWebUI API connection
+- **!clear_chat** - Clear your conversation history with the bot
 
 ### 📚 Documentation
 - **!docs \<query>** - Search through the OpenWebUI documentation
@@ -22,6 +23,7 @@ A Discord bot for the OpenWebUI community, providing LLM interactions, documenta
 
 ### 📊 Utility
 - **!ping** - Check the bot's latency to Discord
+- **!welcome** - Display a welcome message with features overview
 
 ### 🛡️ Admin Commands
 - **!syncdocs** - Manually trigger documentation sync
@@ -54,7 +56,7 @@ A Discord bot for the OpenWebUI community, providing LLM interactions, documenta
    ```
 
 3. Fill in the required environment variables:
-   - `DISCORD_TOKEN`: Your Discord bot token
+   - `DISCORD_TOKEN`: Your Discord bot token (required)
    - `OPENWEBUI_API_URL`: URL to your OpenWebUI instance
    - `OPENWEBUI_DEFAULT_MODEL`: Default LLM model to use
    - `OPENWEBUI_API_KEY` or `OPENWEBUI_JWT_TOKEN`: Authentication for OpenWebUI
@@ -129,6 +131,11 @@ Channel logging is configured in `channel_logger_config.json`:
 !ask llama3:latest Explain the advantages of Ollama vs other local LLM solutions
 ```
 
+### Clear conversation history:
+```
+!clear_chat
+```
+
 ### Search documentation:
 ```
 !docs installation
@@ -143,6 +150,109 @@ Channel logging is configured in `channel_logger_config.json`:
 ```
 !yt open webui tutorial
 ```
+
+## 🛠️ Project Structure and Architecture
+
+The bot is designed with a modular architecture using Discord.py's cog system:
+
+```
+monolith-discord-bot/
+├── cogs/                    # Command modules
+│   ├── admin_cog.py         # Administrative commands
+│   ├── channel_logger_cog.py # Channel logging functionality
+│   ├── documentation_cog.py  # Documentation search
+│   ├── general_cog.py       # Basic utility commands
+│   ├── help_cog.py          # Custom help system
+│   ├── ollama_model_search_cog.py # Model discovery
+│   ├── openwebui_cog.py     # LLM interaction
+│   └── youtube_cog.py       # YouTube search
+├── config_manager.py        # Configuration handling
+├── monolith_discord.py      # Main bot entry point
+├── utils.py                 # Shared utility functions
+└── ... other configuration files
+```
+
+Key components:
+
+- **MonolithBot Class**: Extended Discord.py bot with configuration management and error handling
+- **ConfigManager**: Centralizes configuration from environment variables and files
+- **Cog System**: Organizes commands into modular feature sets
+- **Error Handling System**: Multi-layered approach with specific handlers at each level
+- **Rate Limiting**: Prevents command spam and API abuse
+
+## 🐛 Troubleshooting
+
+### Common Issues and Solutions
+
+#### Bot Won't Start
+- Ensure `DISCORD_TOKEN` is set correctly
+- Verify Python version is 3.12+
+- Check all dependencies are installed
+- Look for detailed error messages in the logs
+
+#### OpenWebUI Commands Fail
+- Run `!diagnose_api` to check OpenWebUI connectivity
+- Verify API key or JWT token configuration
+- Ensure OpenWebUI server is running and accessible
+- Check that specified models exist on your OpenWebUI instance
+
+#### Documentation Search Issues
+- Run `!syncdocs` to manually rebuild the documentation index
+- Verify `DOCS_ZIP_URL` points to a valid documentation archive
+- Check that the documentation structure matches expected patterns
+
+### Diagnostic Tools
+
+- **!diagnose_api**: Comprehensive API connection testing
+- **!debug_env**: Shows loaded configuration (admin only)
+- **!test_auth**: Verifies authentication credentials
+- **!logger_status**: Displays channel logging configuration
+
+## 📊 Logging System
+
+The bot implements comprehensive logging:
+
+- **Console Output**: Real-time logs during operation
+- **File Logging**: All logs stored in the `logs/` directory
+- **Channel Logging**: Optional Discord channel archiving
+- **Structured Format**: Timestamps, log levels, and contextual information
+
+Log files use the format `bot_YYYYMMDD_HHMMSS.log` and contain all bot activity.
+
+## 🧪 Development Guidelines
+
+### Adding New Commands
+
+To add a new command to an existing cog:
+
+1. Define the command method with appropriate decorator:
+   ```python
+   @commands.command(name="command_name", help="Command description")
+   async def command_method(self, ctx: commands.Context, *args):
+       # Command implementation
+   ```
+
+2. Add error handling for the command
+3. Update help documentation
+4. Include proper logging
+
+### Creating New Cogs
+
+For new feature modules:
+
+1. Create a new file in the `cogs/` directory
+2. Follow the established cog structure pattern
+3. Implement `setup()` function for loading
+4. Register the cog in documentation
+
+### Testing
+
+The project uses pytest for testing:
+
+- Test files located in `tests/` directory
+- Run with `pytest` command
+- Async fixture support for bot/cog testing
+- Mocking framework for external dependencies
 
 ## 🔄 Updating
 

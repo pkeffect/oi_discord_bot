@@ -11,9 +11,45 @@ import sys
 from typing import Optional
 from config_manager import ConfigManager
 
-# --- Logging Setup ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s')
+# --- Initial Logging Setup ---
+def setup_logging():
+    """Configure logging to both console and file."""
+    # Create logs directory if it doesn't exist
+    logs_dir = pathlib.Path('logs')
+    logs_dir.mkdir(exist_ok=True)
+    
+    # Determine the log filename with timestamp
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = logs_dir / f"bot_{timestamp}.log"
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Console handler with colorized output
+    console_handler = logging.StreamHandler()
+    console_format = '%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s'
+    console_handler.setFormatter(logging.Formatter(console_format))
+    root_logger.addHandler(console_handler)
+    
+    # File handler
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_format = '%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s'
+    file_handler.setFormatter(logging.Formatter(file_format))
+    root_logger.addHandler(file_handler)
+    
+    # Set specific logging levels for noisy modules
+    logging.getLogger('discord').setLevel(logging.WARNING)
+    logging.getLogger('discord.http').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    
+    return log_file
+
+# Setup logging first
+log_file = setup_logging()
 logger = logging.getLogger(__name__)
+logger.info(f"Logging to console and file: {log_file}")
 
 # --- Load environment variables ---
 load_dotenv()
@@ -104,95 +140,56 @@ class MonolithBot(commands.Bot):
             )
         )
         logger.info('------ Bot is Ready ------')
+    
+    # --- Moved error handler into the class ---
+    async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
+        """
+        Global error handler for commands not caught by cog-specific handlers.
+        
+        Args:
+            ctx: The command context
+            error: The error raised during command execution
+        """
+        # Check if the cog has its own error handler
+        if ctx.cog and hasattr(ctx.cog, 'cog_command_error'):
+            return  # Let the cog handle its own errors
 
-def setup_logging():
-    """Configure logging to both console and file."""
-    # Create logs directory if it doesn't exist
-    logs_dir = pathlib.Path('logs')
-    logs_dir.mkdir(exist_ok=True)
-    
-    # Determine the log filename with timestamp
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = logs_dir / f"bot_{timestamp}.log"
-    
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    
-    # Console handler with colorized output
-    console_handler = logging.StreamHandler()
-    console_format = '%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s'
-    console_handler.setFormatter(logging.Formatter(console_format))
-    root_logger.addHandler(console_handler)
-    
-    # File handler
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_format = '%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s'
-    file_handler.setFormatter(logging.Formatter(file_format))
-    root_logger.addHandler(file_handler)
-    
-    # Set specific logging levels for noisy modules
-    logging.getLogger('discord').setLevel(logging.WARNING)
-    logging.getLogger('discord.http').setLevel(logging.WARNING)
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-    
-    return log_file
+        # Check if the command has its own error handler
+        if hasattr(ctx.command, 'on_error'):
+            return  # Let the command handle its own errors
 
-# Call setup_logging at the beginning of main execution
-log_file = setup_logging()
-logger = logging.getLogger(__name__)
-logger.info(f"Logging to console and file: {log_file}")
+        # Extract the original error if it's wrapped
+        original_error = getattr(error, 'original', error)
 
-# --- Global Error Handler ---
-@bot.event
-async def on_command_error(ctx: commands.Context, error: commands.CommandError):
-    """
-    Global error handler for commands not caught by cog-specific handlers.
-    
-    Args:
-        ctx: The command context
-        error: The error raised during command execution
-    """
-    # Check if the cog has its own error handler
-    if ctx.cog and hasattr(ctx.cog, 'cog_command_error'):
-        return  # Let the cog handle its own errors
+        # Handle specific error types
+        if isinstance(original_error, (commands.CommandNotFound, commands.NotOwner)):
+            logger.debug(f"Command error ignored: {type(original_error).__name__} in {ctx.channel} by {ctx.author}")
+            return
+        elif isinstance(original_error, commands.MissingPermissions):
+            logger.warning(f"Missing permissions for command '{ctx.command.qualified_name if ctx.command else 'Unknown'}': {original_error.missing_permissions}")
+            try:
+                await ctx.send(f"Sorry {ctx.author.mention}, you don't have permission to use that command.", delete_after=10)
+            except discord.Forbidden:
+                pass
+            return
+        elif isinstance(original_error, commands.CheckFailure):
+            logger.warning(f"Check failed for command '{ctx.command.qualified_name if ctx.command else 'Unknown'}': {original_error}")
+            try:
+                await ctx.send(f"Sorry {ctx.author.mention}, you cannot run this command here.", delete_after=10)
+            except discord.Forbidden:
+                pass
+            return
 
-    # Check if the command has its own error handler
-    if hasattr(ctx.command, 'on_error'):
-        return  # Let the command handle its own errors
+        # Log other errors more verbosely
+        command_name = ctx.command.qualified_name if ctx.command else 'Unknown Command'
+        logger.error(f"Unhandled error in command '{command_name}':", exc_info=error)
 
-    # Extract the original error if it's wrapped
-    original_error = getattr(error, 'original', error)
-
-    # Handle specific error types
-    if isinstance(original_error, (commands.CommandNotFound, commands.NotOwner)):
-        logger.debug(f"Command error ignored: {type(original_error).__name__} in {ctx.channel} by {ctx.author}")
-        return
-    elif isinstance(original_error, commands.MissingPermissions):
-        logger.warning(f"Missing permissions for command '{ctx.command.qualified_name if ctx.command else 'Unknown'}': {original_error.missing_permissions}")
+        # Inform user generically about unhandled errors
         try:
-            await ctx.send(f"Sorry {ctx.author.mention}, you don't have permission to use that command.", delete_after=10)
+            await ctx.send(f"Oops! An unexpected error occurred while running `{command_name}`. Please contact an admin if this persists.")
         except discord.Forbidden:
-            pass
-        return
-    elif isinstance(original_error, commands.CheckFailure):
-        logger.warning(f"Check failed for command '{ctx.command.qualified_name if ctx.command else 'Unknown'}': {original_error}")
-        try:
-            await ctx.send(f"Sorry {ctx.author.mention}, you cannot run this command here.", delete_after=10)
-        except discord.Forbidden:
-            pass
-        return
+            logger.warning(f"Cannot send error message in channel {ctx.channel.id} due to permissions.")
 
-    # Log other errors more verbosely
-    command_name = ctx.command.qualified_name if ctx.command else 'Unknown Command'
-    logger.error(f"Unhandled error in command '{command_name}':", exc_info=error)
-
-    # Inform user generically about unhandled errors
-    try:
-        await ctx.send(f"Oops! An unexpected error occurred while running `{command_name}`. Please contact an admin if this persists.")
-    except discord.Forbidden:
-        logger.warning(f"Cannot send error message in channel {ctx.channel.id} due to permissions.")
 
 # --- Main Execution ---
 if __name__ == "__main__":

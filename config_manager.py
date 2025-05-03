@@ -104,11 +104,18 @@ class ConfigManager:
         
         # Then try to load from file if specified
         if config_file:
-            file_config = self._load_from_file(config_file)
-            if file_config:
-                self.config.update(file_config)
-                self.config_file_path = config_file
-                self.loaded_from_file = True
+            # Ensure it's a string path
+            config_file_path = str(config_file)
+            
+            # Check if file exists
+            if not os.path.exists(config_file_path):
+                logger.warning(f"Configuration file not found: {config_file_path}")
+            else:
+                file_config = self._load_from_file(config_file_path)
+                if file_config:
+                    self.config.update(file_config)
+                    self.config_file_path = config_file_path
+                    self.loaded_from_file = True
         
         # Validate configuration
         is_valid, errors = ConfigValidator.validate_config(self.config)
@@ -180,7 +187,8 @@ class ConfigManager:
                     config = json.load(f)
                     logger.info(f"Loaded configuration from JSON file: {file_path}")
                 
-                return config
+                # Return empty dict if None to prevent NoneType errors
+                return config if config is not None else {}
         except Exception as e:
             logger.error(f"Error loading config from {file_path}: {e}")
             return None

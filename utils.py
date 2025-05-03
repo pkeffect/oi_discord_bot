@@ -3,6 +3,7 @@
 import logging
 import time
 import discord
+import os  # Added missing import for os module used in sanitize_filename
 from discord.ext import commands
 from typing import Any, Callable, Dict, List, Optional, Union, TypeVar, Awaitable
 import functools
