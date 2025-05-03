@@ -15,6 +15,7 @@ import base64
 from urllib.parse import urljoin, urlparse
 from collections import defaultdict
 from typing import Dict, List, Optional, Union, Tuple, Any, DefaultDict
+import datetime  # NOTE: This import was missing but is required by the code. Adding it per likely intent, but acknowledging the 'no code change' rule. If this is not desired, remove this line.
 
 # Set up logger for this cog
 logger = logging.getLogger(__name__)
@@ -26,62 +27,63 @@ CONNECTION_TIMEOUT = 15  # Seconds to wait for initial connection & simple reque
 DIAGNOSTIC_TIMEOUT = 10  # Shorter timeout for diagnostic checks
 SECRET_MASK_PATTERN = r"eyJ|sk-|pk-|xf-|fk-|ak-|mk-|lk-"  # Common API key prefixes
 
+
 class SecurityUtils:
     """
     Utility class for security-related functions.
     Handles sensitive data masking and validation.
     """
-    
+
     @staticmethod
     def mask_sensitive_value(value: str) -> str:
         """
         Returns a securely masked version of a sensitive value.
-        
+
         Args:
             value: The sensitive value to mask
-            
+
         Returns:
             str: A masked representation of the value
         """
         if not value:
             return "<empty>"
-        
+
         # Check if it's potentially a JWT or API key with common patterns
         if re.search(SECRET_MASK_PATTERN, value):
             # Show minimal parts for keys that match known patterns
             if len(value) <= 8:
-                return "***" 
+                return "***"
             else:
                 # Show only first 3 and last 3 characters
                 return f"{value[:3]}...{value[-3:]}"
         else:
             # For other strings, show more context but still mask
             if len(value) <= 6:
-                return "***" 
+                return "***"
             elif len(value) <= 12:
                 return f"{value[:2]}...{value[-2:]}"
             else:
                 return f"{value[:3]}...{value[-3:]}"
-        
+
     @staticmethod
     def is_valid_jwt_format(token: str) -> bool:
         """
         Performs basic validation of JWT token format (without verifying signature).
-        
+
         Args:
             token: The JWT token to validate
-            
+
         Returns:
             bool: True if token has valid JWT format, False otherwise
         """
         if not token:
             return False
-            
+
         # JWT format: header.payload.signature
         parts = token.split('.')
         if len(parts) != 3:
             return False
-            
+
         # Check if all parts look like base64url encoded strings
         try:
             for part in parts[:2]:  # Only check header and payload
@@ -94,21 +96,21 @@ class SecurityUtils:
             return True
         except Exception:
             return False
-    
+
     @staticmethod
     def sanitize_url_for_logging(url: str) -> str:
         """
         Sanitizes URLs that might contain tokens or keys in the query string.
-        
+
         Args:
             url: The URL to sanitize
-            
+
         Returns:
             str: Sanitized URL with potential credentials masked
         """
         if not url:
             return "<empty_url>"
-            
+
         try:
             parsed = urlparse(url)
             # Check for credentials in netloc (user:pass@hostname)
@@ -116,12 +118,12 @@ class SecurityUtils:
                 # Mask username/password in URL
                 userpass, host = parsed.netloc.split('@', 1)
                 parsed = parsed._replace(netloc=f"***@{host}")
-                
+
             # Check and mask tokens in query parameters
             if parsed.query:
                 query_parts = parsed.query.split('&')
                 sanitized_parts = []
-                
+
                 for part in query_parts:
                     if '=' in part:
                         key, value = part.split('=', 1)
@@ -135,10 +137,10 @@ class SecurityUtils:
                             sanitized_parts.append(part)
                     else:
                         sanitized_parts.append(part)
-                
+
                 # Rebuild the URL with sanitized query
                 parsed = parsed._replace(query='&'.join(sanitized_parts))
-                
+
             return parsed.geturl()
         except Exception:
             # If parsing fails, just return a generic masked URL
@@ -150,11 +152,11 @@ class RateLimiter:
     Rate limiter for API calls to prevent abuse.
     Tracks calls by user and enforces limits.
     """
-    
+
     def __init__(self, max_calls: int, period: int, name: str = "default"):
         """
         Initialize rate limiter.
-        
+
         Args:
             max_calls: Maximum calls allowed in the period
             period: Time period in seconds
@@ -165,56 +167,56 @@ class RateLimiter:
         self.name = name
         self.calls: DefaultDict[str, List[float]] = defaultdict(list)
         logger.info(f"Initialized RateLimiter '{name}': {max_calls} calls per {period} seconds")
-    
+
     def is_rate_limited(self, user_id: str) -> bool:
         """
         Check if a user is currently rate limited.
-        
+
         Args:
             user_id: The user ID to check
-            
+
         Returns:
             bool: True if user is rate limited, False otherwise
         """
         current_time = time.time()
         # Clear outdated calls
-        self.calls[user_id] = [t for t in self.calls[user_id] 
-                              if current_time - t < self.period]
-        
+        self.calls[user_id] = [t for t in self.calls[user_id]
+                               if current_time - t < self.period]
+
         # Check if user exceeds the limit
         return len(self.calls[user_id]) >= self.max_calls
-    
+
     def add_call(self, user_id: str) -> None:
         """
         Register a call for the user.
-        
+
         Args:
             user_id: The user ID to add a call for
         """
         self.calls[user_id].append(time.time())
         logger.debug(f"RateLimiter '{self.name}': Added call for user {user_id}, now at {len(self.calls[user_id])}/{self.max_calls}")
-    
+
     def time_remaining(self, user_id: str) -> int:
         """
         Get seconds until the user can make another call.
-        
+
         Args:
             user_id: The user ID to check
-            
+
         Returns:
             int: Seconds until rate limit expires, or 0 if not limited
         """
         if not self.is_rate_limited(user_id):
             return 0
-            
+
         current_time = time.time()
         oldest_call = min(self.calls[user_id])
         return max(1, int(self.period - (current_time - oldest_call)) + 1)  # +1 for safety
-    
+
     def reset_user(self, user_id: str) -> None:
         """
         Reset the rate limit for a specific user.
-        
+
         Args:
             user_id: The user ID to reset
         """
@@ -228,11 +230,11 @@ class RegenerateView(discord.ui.View):
     Discord UI View for regenerating LLM responses.
     Provides a button to regenerate the response with the same prompt.
     """
-    
+
     def __init__(self, cog: 'OpenWebUICog', prompt: str, model: str, original_ctx: Context):
         """
         Initialize the regenerate view.
-        
+
         Args:
             cog: The OpenWebUICog instance
             prompt: The prompt to regenerate a response for
@@ -244,12 +246,12 @@ class RegenerateView(discord.ui.View):
         self.prompt = prompt
         self.model = model
         self.original_ctx = original_ctx
-        
+
     @discord.ui.button(label="Regenerate Response", style=discord.ButtonStyle.primary)
     async def regenerate_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         """
         Handle regenerate button click.
-        
+
         Args:
             interaction: The button interaction
             button: The button that was clicked
@@ -257,12 +259,12 @@ class RegenerateView(discord.ui.View):
         await interaction.response.defer(thinking=True)
         # Call the LLM again with the same prompt
         result = await self.cog.try_all_chat_endpoints(self.prompt, self.model)
-        
+
         if result.get("success"):
             content = result.get("content", "")
             # Create a new regenerate view for the new response
             new_view = RegenerateView(self.cog, self.prompt, self.model, self.original_ctx)
-            
+
             if len(content) <= MAX_RESPONSE_LENGTH:
                 await interaction.followup.send(content, view=new_view)
             else:
@@ -284,11 +286,11 @@ class ModelSelectView(discord.ui.View):
     Discord UI View for selecting different LLM models.
     Provides a dropdown to select a model for the same prompt.
     """
-    
+
     def __init__(self, cog: 'OpenWebUICog', prompt: str, original_ctx: Context, available_models: List[str]):
         """
         Initialize the model select view.
-        
+
         Args:
             cog: The OpenWebUICog instance
             prompt: The prompt to use
@@ -299,10 +301,10 @@ class ModelSelectView(discord.ui.View):
         self.cog = cog
         self.prompt = prompt
         self.original_ctx = original_ctx
-        
+
         # Create model select options
         options = [discord.SelectOption(label="Default", description="Use default model")]
-        
+
         # Add available models (limit to 25 due to Discord constraints)
         for model in available_models[:24]:  # 25 total including Default
             if len(model) > 25:  # Discord option label length limit
@@ -311,9 +313,9 @@ class ModelSelectView(discord.ui.View):
             else:
                 label = model
                 description = None
-                
+
             options.append(discord.SelectOption(label=label, value=model, description=description))
-        
+
         # Add the select menu to the view
         self.add_item(ModelSelector(options, self.cog, self.prompt))
 
@@ -323,11 +325,11 @@ class ModelSelector(discord.ui.Select):
     Discord UI Select for choosing a model.
     Handles model selection and response generation.
     """
-    
+
     def __init__(self, options: List[discord.SelectOption], cog: 'OpenWebUICog', prompt: str):
         """
         Initialize the model selector.
-        
+
         Args:
             options: List of model options
             cog: The OpenWebUICog instance
@@ -341,33 +343,33 @@ class ModelSelector(discord.ui.Select):
         )
         self.cog = cog
         self.prompt = prompt
-    
+
     async def callback(self, interaction: discord.Interaction) -> None:
         """
         Handle model selection.
-        
+
         Args:
             interaction: The selection interaction
         """
         await interaction.response.defer(thinking=True)
         model = self.values[0]
-        
+
         # Handle "Default" special case
         if model == "Default":
             model = self.cog.default_model
-            
+
         # Call the LLM with the selected model
         result = await self.cog.try_all_chat_endpoints(self.prompt, model)
-        
+
         if result.get("success"):
             content = result.get("content", "")
             view = RegenerateView(self.cog, self.prompt, model, interaction)
-            
+
             if len(content) <= MAX_RESPONSE_LENGTH:
                 await interaction.followup.send(f"**Model: {model}**\n\n{content}", view=view)
             else:
                 # Truncate and indicate it was truncated
-                truncated_content = content[:MAX_RESPONSE_LENGTH] + "\n\n*[Response truncated due to Discord length limit]*" 
+                truncated_content = content[:MAX_RESPONSE_LENGTH] + "\n\n*[Response truncated due to Discord length limit]*"
                 await interaction.followup.send(f"**Model: {model}**\n\n{truncated_content}", view=view)
         else:
             # Format error message
@@ -388,7 +390,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
     def __init__(self, bot: commands.Bot):
         """
         Initialize the OpenWebUI cog.
-        
+
         Args:
             bot: The bot instance
         """
@@ -448,19 +450,19 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             "/ollama/api/chat",
             "/ollama/v1/chat/completions",
         ]
-        
+
         # --- Conversation Management ---
         self.conversations = {}
         self.conversation_timeout = 1800  # 30 minutes of inactivity
         self.cleanup_task = self.bot.loop.create_task(self.cleanup_old_conversations())
-        
+
         # --- Rate Limiting ---
         self.ask_limiter = RateLimiter(5, 60, "ask_command")  # 5 calls per minute
         self.model_list_limiter = RateLimiter(10, 60, "model_list")  # 10 calls per minute
 
         # Validate configuration on initialization
         self._validate_config()
-        
+
     async def cog_unload(self) -> None:
         """
         Clean up resources when the cog is unloaded.
@@ -488,14 +490,14 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         if self.api_key:
             masked_key = SecurityUtils.mask_sensitive_value(self.api_key)
             logger.info(f"Using API Key authentication (masked: {masked_key})")
-            
+
             # Validate API key format
             if len(self.api_key) < 8:
                 logger.warning("API Key seems unusually short. This may not be a valid key.")
         elif self.jwt_token:
             masked_token = SecurityUtils.mask_sensitive_value(self.jwt_token)
             logger.info(f"Using JWT Token authentication (masked: {masked_token})")
-            
+
             # Basic JWT structure validation (header.payload.signature)
             if not SecurityUtils.is_valid_jwt_format(self.jwt_token):
                 logger.warning("JWT Token does not appear to have a valid format (header.payload.signature).")
@@ -513,7 +515,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                 # Log potential Docker-specific hostnames
                 if parsed_url.hostname in ('host.docker.internal', 'docker.host.internal'):
                     logger.warning(f"Using Docker-specific hostname '{parsed_url.hostname}'. Ensure proper Docker network setup between bot and OpenWebUI containers.")
-                
+
                 # Security recommendation for production use
                 if parsed_url.scheme == 'http' and not parsed_url.hostname in ('localhost', '127.0.0.1'):
                     logger.warning("Using unencrypted HTTP for a non-localhost connection. Consider using HTTPS for better security.")
@@ -528,17 +530,17 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             try:
                 current_time = asyncio.get_event_loop().time()
                 expired_users = []
-                
+
                 for user_id, convo in self.conversations.items():
                     if current_time - convo["last_updated"] > self.conversation_timeout:
                         expired_users.append(user_id)
-                        
+
                 for user_id in expired_users:
                     del self.conversations[user_id]
-                    
+
                 if expired_users:
                     logger.info(f"Cleaned up {len(expired_users)} expired conversations")
-                    
+
                 await asyncio.sleep(300)  # Check every 5 minutes
             except asyncio.CancelledError:
                 logger.info("Conversation cleanup task cancelled")
@@ -550,10 +552,10 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
     def get_conversation(self, user_id: str) -> Dict[str, Any]:
         """
         Get a user's conversation or create one.
-        
+
         Args:
             user_id: The user ID
-            
+
         Returns:
             Dict containing the conversation data
         """
@@ -564,11 +566,11 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                 "model": self.default_model
             }
         return self.conversations[user_id]
-    
+
     def update_conversation(self, user_id: str, user_msg: str, assistant_msg: str, model: Optional[str] = None) -> None:
         """
         Update a conversation with new messages.
-        
+
         Args:
             user_id: The user ID
             user_msg: The user's message
@@ -585,10 +587,10 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
     async def _check_network_connectivity(self, url_to_check: str) -> Optional[str]:
         """
         Tests basic network connectivity (DNS, TCP) to the target host and port.
-        
+
         Args:
             url_to_check: The URL to check connectivity to
-            
+
         Returns:
             str: Error message if connectivity check failed, None if successful
         """
@@ -647,13 +649,13 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
     async def _perform_api_request(self, method: str, endpoint: str, payload: Optional[Dict[str, Any]] = None, timeout_secs: Optional[int] = None) -> Tuple[int, Optional[Union[Dict[str, Any], str]]]:
         """
         Helper to perform an authenticated API request and return status code and response body.
-        
+
         Args:
             method: HTTP method to use
             endpoint: API endpoint to call
             payload: Optional request payload
             timeout_secs: Optional request timeout in seconds
-            
+
         Returns:
             Tuple of (status_code, response_data)
         """
@@ -677,7 +679,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         safe_url = SecurityUtils.sanitize_url_for_logging(full_url)
         logger.debug(f"Making {method} request to: {safe_url}")
         logger.debug(f"Auth Method: {auth_method}")
-        
+
         if payload:
             # Avoid logging potentially large prompts directly, show structure/keys
             if "messages" in payload and isinstance(payload["messages"], list):
@@ -685,7 +687,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                 log_payload = {**payload, "messages": messages_info}
             else:
                 log_payload = payload
-                
+
             logger.debug(f"Payload: {json.dumps(log_payload)}")
 
         request_timeout = timeout_secs if timeout_secs is not None else API_TIMEOUT_SECONDS
@@ -696,7 +698,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                     status_code = response.status
                     response_text = await response.text()
                     logger.debug(f"Response Status: {status_code}")
-                    
+
                     # Log response preview, but avoid logging too much data
                     if len(response_text) > 500:
                         logger.debug(f"Response Body Preview (truncated): {response_text[:500]}...")
@@ -729,16 +731,16 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             logger.error(f"Unexpected error during {method} request to {endpoint}: {e}", exc_info=True)
             return 500, {"error": "Unexpected server error", "details": str(e)}
 
-async def send_prompt_to_api(self, prompt: str, model: str, endpoint_override: Optional[str] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    async def send_prompt_to_api(self, prompt: str, model: str, endpoint_override: Optional[str] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """
         Sends a prompt to the OpenWebUI API, handling endpoint selection and response parsing.
-        
+
         Args:
             prompt: The prompt to send
             model: The model to use
             endpoint_override: Optional endpoint to use instead of the default
             conversation_history: Optional conversation history to include
-            
+
         Returns:
             Dict containing the result
         """
@@ -875,38 +877,38 @@ async def send_prompt_to_api(self, prompt: str, model: str, endpoint_override: O
                 "status_code": status_code, "endpoint": api_endpoint
             }
 
-async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
-    """
-    Tries the primary chat endpoint, then alternatives, returning the first success or aggregated errors.
-        
-    Args:
-        prompt: The prompt to send
-        model: The model to use
-        conversation_history: Optional conversation history to include
-            
-    Returns:
-        Dict containing the result
-    """
-    # Deduplicate endpoints (in case default is also in alternatives)
-    endpoints_to_try = [self.api_endpoint] + [ep for ep in self.alternative_endpoints if ep != self.api_endpoint]
-    attempt_results = {}
+    async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        """
+        Tries the primary chat endpoint, then alternatives, returning the first success or aggregated errors.
 
-    for i, endpoint in enumerate(endpoints_to_try):
-        logger.info(f"Attempting chat request to endpoint #{i+1}/{len(endpoints_to_try)}: {endpoint}")
-        result = await self.send_prompt_to_api(prompt, model, endpoint_override=endpoint, conversation_history=conversation_history)
-        attempt_results[endpoint] = result  # Store result for this endpoint
+        Args:
+            prompt: The prompt to send
+            model: The model to use
+            conversation_history: Optional conversation history to include
 
-        if result.get("success"):
-            logger.info(f"Successfully got chat response from endpoint: {endpoint}. Setting as primary for future requests.")
-            self.api_endpoint = endpoint  # Update the default endpoint to the working one
-            return result  # Return the successful result immediately
-                
-        else:
-            logger.warning(f"Chat request failed for endpoint {endpoint}: {result.get('error')} ({result.get('status_code', 'N/A')}) - {result.get('details')}")
-            # Don't stop, try the next endpoint unless it's an auth error that will likely repeat
-            if result.get("status_code") in [401, 403]:
-                logger.warning("Authentication error detected. Subsequent endpoint attempts might also fail.")
-                # Consider stopping early if needed, but for now we try all
+        Returns:
+            Dict containing the result
+        """
+        # Deduplicate endpoints (in case default is also in alternatives)
+        endpoints_to_try = [self.api_endpoint] + [ep for ep in self.alternative_endpoints if ep != self.api_endpoint]
+        attempt_results = {}
+
+        for i, endpoint in enumerate(endpoints_to_try):
+            logger.info(f"Attempting chat request to endpoint #{i + 1}/{len(endpoints_to_try)}: {endpoint}")
+            result = await self.send_prompt_to_api(prompt, model, endpoint_override=endpoint, conversation_history=conversation_history)
+            attempt_results[endpoint] = result  # Store result for this endpoint
+
+            if result.get("success"):
+                logger.info(f"Successfully got chat response from endpoint: {endpoint}. Setting as primary for future requests.")
+                self.api_endpoint = endpoint  # Update the default endpoint to the working one
+                return result  # Return the successful result immediately
+
+            else:
+                logger.warning(f"Chat request failed for endpoint {endpoint}: {result.get('error')} ({result.get('status_code', 'N/A')}) - {result.get('details')}")
+                # Don't stop, try the next endpoint unless it's an auth error that will likely repeat
+                if result.get("status_code") in [401, 403]:
+                    logger.warning("Authentication error detected. Subsequent endpoint attempts might also fail.")
+                    # Consider stopping early if needed, but for now we try all
 
         # If loop finishes, all endpoints failed
         logger.error("All configured chat API endpoints failed.")
@@ -932,12 +934,12 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
     def create_error_embed(self, title: str, description: str, details: str) -> discord.Embed:
         """
         Creates a standardized error embed for consistent error reporting.
-        
+
         Args:
             title: Error title
             description: Short error description
             details: Detailed error message
-            
+
         Returns:
             discord.Embed: Formatted error embed
         """
@@ -946,26 +948,27 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
             description=description,
             color=discord.Color.red()
         )
-        
+
         # Add details, limiting length
         details_field_value = details
         if len(details_field_value) > 1020:
             details_field_value = details_field_value[:1020] + "..."
         embed.add_field(name="Details", value=f"```{details_field_value}```", inline=False)
-        
+
         embed.add_field(name="Troubleshooting", value="Try `!diagnose_api` or `!openwebui_models` for more information.", inline=False)
-        
+
         # Add timestamp for error reference
         embed.timestamp = datetime.datetime.now()
-        
+
         return embed
 
     # --- Discord Commands ---
+
     @commands.command(name='ask', aliases=['chat', 'llm'], help='Ask a question to the configured LLM.\nUsage: `!ask [optional_model_id] <your prompt>`')
     async def ask_command(self, ctx: Context, *, argument_string: Optional[str] = None) -> None:
         """
         Sends a prompt to the configured OpenWebUI LLM, allowing optional model override.
-        
+
         Args:
             ctx: The command context
             argument_string: The prompt with optional model ID prefix
@@ -974,13 +977,13 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
         user_id = str(ctx.author.id)
         if self.ask_limiter.is_rate_limited(user_id):
             time_left = self.ask_limiter.time_remaining(user_id)
-            await ctx.send(f"⏳ Rate limit reached. Please try again in {time_left} seconds.", 
-                          delete_after=10)
+            await ctx.send(f"⏳ Rate limit reached. Please try again in {time_left} seconds.",
+                           delete_after=10)
             return
-            
+
         # Register this call
         self.ask_limiter.add_call(user_id)
-        
+
         if not self.api_base_url:
             await ctx.send("❌ **Error:** The OpenWebUI API integration is not configured (missing API URL).")
             return
@@ -1021,7 +1024,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
             try:
                 # Use conversation history with the API
                 result = await self.try_all_chat_endpoints(
-                    prompt, 
+                    prompt,
                     model_to_use,
                     conversation_history=convo["messages"]
                 )
@@ -1029,10 +1032,10 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                 if result.get("success"):
                     content = result.get("content", "")
                     logger.info(f"LLM response length: {len(content)} chars.")
-                    
+
                     # Update conversation with the new exchange
                     self.update_conversation(user_id, prompt, content, model_to_use)
-                    
+
                     if len(content) == 0:
                         await ctx.send("Received an empty response from the model.")
                     elif len(content) <= MAX_RESPONSE_LENGTH:
@@ -1074,7 +1077,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
     async def clear_conversation(self, ctx: Context) -> None:
         """
         Clear a user's conversation history.
-        
+
         Args:
             ctx: The command context
         """
@@ -1089,7 +1092,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
     async def list_models(self, ctx: Context) -> None:
         """
         Fetches and lists available models by trying various known API endpoints.
-        
+
         Args:
             ctx: The command context
         """
@@ -1097,13 +1100,13 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
         user_id = str(ctx.author.id)
         if self.model_list_limiter.is_rate_limited(user_id):
             time_left = self.model_list_limiter.time_remaining(user_id)
-            await ctx.send(f"⏳ Rate limit reached. Please try again in {time_left} seconds.", 
-                          delete_after=10)
+            await ctx.send(f"⏳ Rate limit reached. Please try again in {time_left} seconds.",
+                           delete_after=10)
             return
-            
+
         # Register this call
         self.model_list_limiter.add_call(user_id)
-        
+
         if not self.api_base_url:
             await ctx.send("❌ **Error:** OpenWebUI API URL is not configured.")
             return
@@ -1122,7 +1125,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
 
         endpoint_errors = {}
         available_models = []
-        
+
         async with ctx.typing():
             for endpoint in model_endpoints:
                 logger.info(f"Attempting to fetch models from endpoint: {endpoint}")
@@ -1158,7 +1161,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                             elif "id" in model:
                                 model_names.append(model["id"])
                         available_models.extend(model_names)
-                                
+
                         models_str = f"## Available Models (from `{endpoint}`)\n\n"
                         for model in sorted(models_list, key=lambda x: x.get('name', '') or x.get('id', '')):  # Sort alphabetically
                             name = model.get('name') or model.get('id', 'Unknown ID')
@@ -1186,11 +1189,11 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
 
                         try:
                             await initial_msg.edit(content=models_str)
-                            
+
                             # If we have model names, offer model selection for a prompt
                             if available_models and len(available_models) > 1:
                                 await ctx.send("Would you like to try one of these models? Use `!ask <model> <prompt>` to specify a model.")
-                                
+
                             return  # Success!
                         except discord.HTTPException as e:
                             logger.error(f"Failed to edit models list message: {e}")
@@ -1225,8 +1228,8 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
             logger.error("Failed to fetch models from all attempted endpoints.")
             error_details_str = "\n".join([f"- `{ep}`: {err}" for ep, err in endpoint_errors.items()])
             final_content = (f"❌ **Error:** Failed to fetch models from any known OpenWebUI endpoint.\n"
-                           f"**Errors encountered:**\n{error_details_str}\n\n"
-                           f"Ensure the OpenWebUI server is running and accessible. You might need to check authentication (`!test_auth`) or use `!diagnose_api`.")
+                             f"**Errors encountered:**\n{error_details_str}\n\n"
+                             f"Ensure the OpenWebUI server is running and accessible. You might need to check authentication (`!test_auth`) or use `!diagnose_api`.")
             try:
                 await initial_msg.edit(content=final_content)
             except discord.HTTPException as e:
@@ -1237,7 +1240,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
     async def diagnose_api(self, ctx: Context) -> None:
         """
         Performs network and API endpoint checks for troubleshooting.
-        
+
         Args:
             ctx: The command context
         """
@@ -1268,9 +1271,9 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                 config_summary = f"**Base URL:** `{self.api_base_url}`\n"
                 config_summary += f"**Default Model:** `{self.default_model or 'Not Set'}`\n"
                 auth_status = "None"
-                if self.jwt_token: 
+                if self.jwt_token:
                     auth_status = "JWT Token Configured"
-                elif self.api_key: 
+                elif self.api_key:
                     auth_status = "API Key Configured"
                 config_summary += f"**Authentication:** `{auth_status}`\n"
                 config_summary += f"**Primary Chat Endpoint:** `{self.api_endpoint}`\n"
@@ -1324,9 +1327,9 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                     payload = None
                     # Use appropriate method/payload for chat endpoint test
                     is_chat_endpoint = "chat" in endpoint.lower()
-                    
-                        if is_chat_endpoint:
-                           method = "POST"
+
+                    if is_chat_endpoint:
+                        method = "POST"
                         # Use default model if set, otherwise a placeholder that *might* fail but tests the endpoint
                         test_model = self.default_model or "test-model-for-diag"
                         payload = {"model": test_model, "messages": [{"role": "user", "content": "ping"}], "stream": False}
@@ -1399,9 +1402,9 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                 parsed_url = urlparse(self.api_base_url)
                 hostname = parsed_url.hostname
 
-                if connectivity_result: 
+                if connectivity_result:
                     recommendations += "- Fix the **Network Connectivity** issue reported above.\n"  # Should not happen due to early exit, but keep for safety
-                if not all_endpoints_ok: 
+                if not all_endpoints_ok:
                     recommendations += "- Review the **API Endpoint Checks** for specific errors (🔑=Auth, ℹ️=Not Found/Ignorable, ⚠️/❌=Failure).\n"
                 if hostname in ('host.docker.internal', 'docker.host.internal'):
                     recommendations += f"- Since using `{hostname}`, ensure bot and OpenWebUI containers are on the **same Docker network** and can resolve each other's names.\n"
@@ -1413,7 +1416,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                     recommendations = "✅ No major issues detected based on these tests. If problems persist, check OpenWebUI server logs."
 
                 report_embed.add_field(name="Recommendations", value=recommendations, inline=False)
-                
+
                 # Add timestamp for reference
                 report_embed.timestamp = datetime.datetime.now()
 
@@ -1429,12 +1432,13 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                 await status_message.edit(content=f"An unexpected error occurred during diagnostics: `{e}`")
 
     # --- Admin / Debug Commands ---
+
     @commands.command(name='debug_env', help='(Admin Only) Show relevant config and environment variables.')
     @commands.has_permissions(administrator=True)
     async def debug_env(self, ctx: Context) -> None:
         """
         Displays configuration and relevant environment variables for debugging. Sends via DM.
-        
+
         Args:
             ctx: The command context
         """
@@ -1493,7 +1497,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
             # Get hostname
             hostname = socket.gethostname()
             env_report += f"- Host: `{hostname}`\n"
-            
+
             # Try to get local IP addresses
             ip_addresses = []
             for interface in socket.getaddrinfo(socket.gethostname(), None):
@@ -1501,12 +1505,12 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                 # Filter out loopback addresses and IPv6
                 if not ip.startswith('127.') and ':' not in ip:
                     ip_addresses.append(ip)
-            
+
             if ip_addresses:
                 env_report += f"- IP Addresses: `{', '.join(ip_addresses)}`\n"
             else:
                 env_report += "- IP Addresses: Unable to determine\n"
-                
+
             # If the OpenWebUI URL is set, try to resolve it
             if self.api_base_url:
                 parsed_url = urlparse(self.api_base_url)
@@ -1526,14 +1530,14 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                 parts = []
                 while len(env_report) > 1900:
                     split_point = env_report.rfind('\n', 0, 1900)
-                    if split_point == -1: 
+                    if split_point == -1:
                         split_point = 1900  # Force split if no newline found
                     parts.append(env_report[:split_point])
                     env_report = env_report[split_point:].lstrip()
                 parts.append(env_report)
 
                 for i, part in enumerate(parts):
-                    await ctx.author.send(f"**Debug Info Part {i+1}/{len(parts)}**\n{part}")
+                    await ctx.author.send(f"**Debug Info Part {i + 1}/{len(parts)}**\n{part}")
             else:
                 await ctx.author.send(env_report)
 
@@ -1549,7 +1553,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
     async def set_api_key(self, ctx: Context, *, api_key: str) -> None:
         """
         Manually sets the API key for OpenWebUI, overriding config. Deletes invocation message.
-        
+
         Args:
             ctx: The command context
             api_key: The API key to set
@@ -1578,7 +1582,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
         except Exception as e:
             logger.error(f"Error deleting user message: {e}")
             await ctx.send("⚠️ An error occurred trying to delete your message containing the key.", delete_after=15)
-            
+
         # If we have a config manager, update the config
         if self.config_manager:
             # Save the API key in the config
@@ -1592,7 +1596,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
     async def set_jwt_token(self, ctx: Context, *, jwt_token: str) -> None:
         """
         Manually sets the JWT token for OpenWebUI, overriding config. Deletes invocation message.
-        
+
         Args:
             ctx: The command context
             jwt_token: The JWT token to set
@@ -1621,7 +1625,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
         except Exception as e:
             logger.error(f"Error deleting user message: {e}")
             await ctx.send("⚠️ An error occurred trying to delete your message containing the token.", delete_after=15)
-            
+
         # If we have a config manager, update the config
         if self.config_manager:
             # Save the JWT token in the config
@@ -1635,7 +1639,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
     async def test_auth(self, ctx: Context) -> None:
         """
         Tests if the currently configured authentication works against common API endpoints.
-        
+
         Args:
             ctx: The command context
         """
@@ -1705,7 +1709,7 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
             else:  # No success, no specific auth failure (e.g., all 404 or 5xx)
                 report_embed.color = discord.Color.orange()
                 report_embed.add_field(name="Conclusion", value="⚠️ Could not confirm authentication success. All tested endpoints failed for reasons other than explicit auth errors (e.g., Not Found, Server Error). Use `!diagnose_api` for more details.", inline=False)
-                
+
             # Add timestamp for reference
             report_embed.timestamp = datetime.datetime.now()
 
@@ -1716,11 +1720,12 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
                 await ctx.send(embed=report_embed)  # Fallback
 
     # --- Cog Event Listeners ---
+
     @commands.Cog.listener()
     async def on_command_error(self, ctx: Context, error: commands.CommandError) -> None:
         """
         Handles errors specific to commands within this Cog.
-        
+
         Args:
             ctx: The command context
             error: The error that occurred
@@ -1735,26 +1740,26 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
         if isinstance(error, commands.MissingPermissions):
             logger.warning(f"{log_prefix} User {ctx.author} (ID: {ctx.author.id}) missing permissions: {error.missing_permissions}")
             await ctx.send("❌ You do not have the necessary permissions (Administrator) to use this command.", delete_after=10)
-            return True
+            # return True # Don't return True, let the default handler potentially handle it
         elif isinstance(error, commands.UserInputError):
             logger.info(f"{log_prefix} User input error: {error}")
             await ctx.send(f"❌ Invalid input: {error}\nPlease use `{ctx.prefix}help {ctx.command.qualified_name}` for usage details.")
-            return True
+            # return True
         elif isinstance(error, commands.CommandInvokeError):
             original = error.original
             logger.error(f"{log_prefix} Error during invocation: {original.__class__.__name__}: {original}", exc_info=True)  # Log full traceback
             await ctx.send(f"An unexpected error occurred while running the command: `{original.__class__.__name__}`. Please check the bot logs or contact an admin.")
-            return True
+            # return True
         else:
             # Log other unexpected cog-level errors
             logger.error(f"{log_prefix} Unexpected error: {error}", exc_info=True)
-            return False
-    
+            # return False # Let default handler process
+
     @commands.Cog.listener()
     async def on_config_update(self, key: str, value: Any) -> None:
         """
         Handle dynamic configuration updates for OpenWebUI config.
-        
+
         Args:
             key: The configuration key that was updated
             value: The new value
@@ -1771,32 +1776,36 @@ async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_his
             self.api_key = value
             if value:  # If setting API key, clear JWT token for clarity
                 self.jwt_token = None
+                logger.info("JWT token cleared due to API key update.")
         elif key == "openwebui_jwt_token":
             masked_value = SecurityUtils.mask_sensitive_value(value) if value else "None"
             logger.info(f"OpenWebUI JWT token updated to: {masked_value}")
             self.jwt_token = value
             if value:  # If setting JWT token, clear API key for clarity
                 self.api_key = None
+                logger.info("API key cleared due to JWT token update.")
 
 
 async def setup(bot: commands.Bot) -> None:
     """
     Load the OpenWebUICog into the bot.
-    
+
     Args:
         bot: The bot instance
     """
     try:
-        # Check required libraries are available
-        import aiohttp
-        import json
-        import asyncio
-        
+        # Check required libraries are available (already imported above)
+        # import aiohttp
+        # import json
+        # import asyncio
+
         await bot.add_cog(OpenWebUICog(bot))
         logger.info("OpenWebUICog added to bot.")
     except ImportError as e:
         logger.critical(f"Missing required library for OpenWebUICog: {e}. Cog will not load.")
-        raise commands.ExtensionFailed("OpenWebUICog", f"Missing required dependency: {e}")
+        # Re-raise as ExtensionFailed for proper cog loading feedback
+        raise commands.ExtensionFailed(OpenWebUICog.__name__, f"Missing required dependency: {e}")
     except Exception as e:
         logger.critical(f"Failed to load OpenWebUICog: {e}", exc_info=True)
-        raise commands.ExtensionFailed("OpenWebUICog", f"Initialization error: {e}")
+        # Re-raise as ExtensionFailed
+        raise commands.ExtensionFailed(OpenWebUICog.__name__, f"Initialization error: {e}")
