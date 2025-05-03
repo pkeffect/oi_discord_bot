@@ -280,6 +280,93 @@ class OllamaModelSearchCog(commands.Cog, name="OllamaSearch"):
             # Log other errors but maybe don't notify user unless critical
             logger.error(f"{log_prefix} Unexpected error: {error}", exc_info=True)
 
+class PaginatedEmbed:
+    def __init__(self, ctx, data, per_page=3):
+        self.ctx = ctx
+        self.data = data  # List of model data
+        self.per_page = per_page
+        self.total_pages = max(1, (len(data) + per_page - 1) // per_page)
+        self.current_page = 0
+        self.message = None
+        self.controls = ["⬅️", "➡️", "🗑️"]
+    
+    def get_page_content(self):
+        start_idx = self.current_page * self.per_page
+        end_idx = min(start_idx + self.per_page, len(self.data))
+        page_data = self.data[start_idx:end_idx]
+        
+        embed = discord.Embed(
+            title=f"Ollama Model Search Results (Page {self.current_page+1}/{self.total_pages})",
+            color=discord.Color.blue()
+        )
+        
+        for model in page_data:
+            # ... format model data for embed just like in your existing code ...
+            display_name = f"{model.get('author', 'library')}/{model.get('name', 'Unknown')}"
+            # ... rest of model formatting ...
+            embed.add_field(name=f"[{display_name}]({model.get('link', '#')})", 
+                           value=field_value, inline=False)
+        
+        embed.set_footer(text=f"Showing results {start_idx+1}-{end_idx} of {len(self.data)}")
+        return embed
+    
+    async def start(self):
+        embed = self.get_page_content()
+        self.message = await self.ctx.send(embed=embed)
+        
+        if self.total_pages > 1:
+            for control in self.controls:
+                await self.message.add_reaction(control)
+            
+            # Start listening for reactions
+            self.bot = self.ctx.bot
+            self.bot.loop.create_task(self.reaction_handler())
+    
+    async def reaction_handler(self):
+        def check(reaction, user):
+            return (
+                user == self.ctx.author and
+                reaction.message.id == self.message.id and
+                str(reaction.emoji) in self.controls
+            )
+        
+        while True:
+            try:
+                reaction, user = await self.bot.wait_for('reaction_add', timeout=60.0, check=check)
+                
+                if str(reaction.emoji) == "⬅️":
+                    self.current_page = (self.current_page - 1) % self.total_pages
+                    await self.message.edit(embed=self.get_page_content())
+                elif str(reaction.emoji) == "➡️":
+                    self.current_page = (self.current_page + 1) % self.total_pages
+                    await self.message.edit(embed=self.get_page_content())
+                elif str(reaction.emoji) == "🗑️":
+                    await self.message.delete()
+                    return
+                
+                await self.message.remove_reaction(reaction.emoji, user)
+                
+            except asyncio.TimeoutError:
+                await self.message.clear_reactions()
+                break
+            except Exception as e:
+                logger.error(f"Error in pagination: {e}")
+                break
+
+# Then update your command to use pagination:
+@commands.command(name="osearch", aliases=["ollama_search"])
+async def osearch(self, ctx, *, query=None):
+    # ... existing search code ...
+    
+    results = self._parse_search_results(html_content)
+    
+    if not results:
+        # ... handling for no results ...
+        return
+    
+    # Use pagination for results
+    paginator = PaginatedEmbed(ctx, results, per_page=3)
+    await paginator.start()
 
 # --- Setup Function ---
 async def setup(bot: commands.Bot):

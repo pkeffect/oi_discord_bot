@@ -13,6 +13,8 @@ import pathlib
 from urllib.parse import urljoin
 from markdown_it import MarkdownIt
 from bs4 import BeautifulSoup, NavigableString
+from functools import lru_cache
+import time
 import shutil
 
 # --- Cog Specific Logger ---
@@ -340,6 +342,97 @@ class DocumentationCog(commands.Cog, name="Documentation"):
              logger.error(f"Error in command '{ctx.command.qualified_name}': {error}", exc_info=log_traceback)
         # Let the main bot error handler deal with other cases or generic messages
 
+class DocumentationCog(commands.Cog, name="Documentation"):
+    def __init__(self, bot):
+        self.bot = bot
+        # ... existing initialization ...
+        
+        # Cache timings in seconds
+        self.cache_durations = {
+            "search": 300,      # 5 minutes for search results
+            "model_list": 600,  # 10 minutes for model lists
+        }
+        
+        # Cache storages
+        self.search_cache = {}
+        self.timestamp_cache = {}
+        
+    def _cache_key(self, query, limit=5):
+        """Generate a cache key for a search query."""
+        return f"{query}::{limit}"
+    
+    def _is_cache_valid(self, cache_key, cache_type="search"):
+        """Check if a cached item is still valid based on its timestamp."""
+        if cache_key not in self.timestamp_cache:
+            return False
+            
+        timestamp = self.timestamp_cache[cache_key]
+        max_age = self.cache_durations.get(cache_type, 300)
+        return (time.time() - timestamp) < max_age
+    
+    def _cache_set(self, cache_key, value, cache_type="search"):
+        """Store an item in the appropriate cache with timestamp."""
+        if cache_type == "search":
+            self.search_cache[cache_key] = value
+        # Add more cache types as needed
+        
+        self.timestamp_cache[cache_key] = time.time()
+    
+    def _cache_get(self, cache_key, cache_type="search"):
+        """Retrieve a cached item if it exists and is valid."""
+        if not self._is_cache_valid(cache_key, cache_type):
+            return None
+            
+        if cache_type == "search":
+            return self.search_cache.get(cache_key)
+        # Add more cache types as needed
+        
+        return None
+    
+    def _cache_invalidate(self, cache_type=None):
+        """Invalidate all caches or a specific cache type."""
+        if cache_type == "search":
+            self.search_cache.clear()
+            # Also remove timestamps for this cache type
+            for key in list(self.timestamp_cache.keys()):
+                if key.endswith("::search"):
+                    del self.timestamp_cache[key]
+        elif cache_type is None:
+            # Invalidate all caches
+            self.search_cache.clear()
+            self.timestamp_cache.clear()
+    
+    # Modify your search method to use caching
+    async def search_documentation(self, query: str, limit: int = 5) -> list[dict]:
+        """Searches the FTS index across structured fields with caching."""
+        cache_key = self._cache_key(query, limit)
+        cached_results = self._cache_get(cache_key, "search")
+        
+        if cached_results is not None:
+            logger.info(f"Using cached results for search query '{query}' (limit: {limit})")
+            return cached_results
+            
+        # Original search logic
+        search_query = query.strip()
+        if " " in search_query and not (search_query.startswith('"') and search_query.endswith('"')):
+            search_query = f'"{search_query}"'
+            
+        logger.info(f"Executing FTS search for: '{search_query}' (original: '{query}')")
+        results = []
+        
+        # ... rest of the original search implementation ...
+        
+        # Cache the results before returning
+        self._cache_set(cache_key, results, "search")
+        return results
+    
+    # Make sure to invalidate caches when index is updated
+    async def index_docs(self) -> bool:
+        success = await super().index_docs()  # Call original implementation
+        if success:
+            # Invalidate search cache when docs are reindexed
+            self._cache_invalidate("search")
+        return success
 
 # --- Setup Function ---
 # Required for discord.py to load the cog

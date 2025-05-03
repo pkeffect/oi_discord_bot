@@ -10,6 +10,7 @@ import platform
 from dotenv import load_dotenv
 import pathlib
 import sys # Added for sys.exit
+from typing import Optional
 
 # --- Configuration Loading ---
 load_dotenv()
@@ -102,8 +103,19 @@ async def setup_hook():
     # await bot.tree.sync()
     # logger.info("Global commands synced.")
 
-# --- Removed Ping Command ---
-# The ping command is assumed to be moved to cogs/general_cog.py
+
+bot = MonolithBot(command_prefix='!', intents=intents)
+
+# Enable the commands.Bot.tree
+@bot.event
+async def setup_hook():
+    """Async setup hook called before on_ready. Ideal for loading cogs."""
+    # ... existing code ...
+    
+    # Sync app commands (slash commands)
+    logger.info("Syncing application commands...")
+    await bot.tree.sync()
+    logger.info("Application commands synced.")
 
 # --- Optional: General Error Handler ---
 @bot.event
@@ -146,7 +158,6 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         await ctx.send(f"Oops! An unexpected error occurred while running `{command_name}`. Please contact an admin if this persists.")
     except discord.Forbidden:
         logger.warning(f"Cannot send error message in channel {ctx.channel.id} due to permissions.")
-
 
 # --- Main Execution ---
 if __name__ == "__main__":

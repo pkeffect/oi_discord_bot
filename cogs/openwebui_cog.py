@@ -10,6 +10,9 @@ import asyncio
 import socket
 import os
 from urllib.parse import urljoin, urlparse
+import time
+from collections import defaultdict
+from typing import Optional
 
 # --- Cog Specific Logger ---
 # Use the standard logging setup provided by the bot loader
@@ -1085,7 +1088,285 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             logger.error(f"{log_prefix} Unexpected error: {error}", exc_info=True)
             # Potentially notify user or just log
 
+class RegenerateView(discord.ui.View):
+    def __init__(self, cog, prompt, model, original_ctx):
+        super().__init__(timeout=180)  # 3 minute timeout
+        self.cog = cog
+        self.prompt = prompt
+        self.model = model
+        self.original_ctx = original_ctx
+        
+    @discord.ui.button(label="Regenerate Response", style=discord.ButtonStyle.primary)
+    async def regenerate_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(thinking=True)
+        # Call the LLM again with the same prompt
+        result = await self.cog.try_all_chat_endpoints(self.prompt, self.model)
+        
+        if result.get("success"):
+            content = result.get("content", "")
+            await interaction.followup.send(content[:1999])  # Respect Discord limits
+        else:
+            await interaction.followup.send(f"❌ Failed to regenerate: {result.get('error')}")
 
+class ModelSelectView(discord.ui.View):
+    def __init__(self, cog, prompt, original_ctx):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.prompt = prompt
+        self.original_ctx = original_ctx
+        
+    @discord.ui.select(
+        placeholder="Select a model",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="Default", description="Use default model"),
+            # You would dynamically populate this with available models
+            # This requires fetching models first or having a cached list
+            discord.SelectOption(label="llama3", description="Llama 3 8B"),
+            discord.SelectOption(label="mistral", description="Mistral 7B"),
+        ]
+    )
+    async def model_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.defer(thinking=True)
+        model = select.values[0]
+        
+        # Handle "Default" special case
+        if model == "Default":
+            model = self.cog.default_model
+            
+        # Call the LLM with the selected model
+        result = await self.cog.try_all_chat_endpoints(self.prompt, model)
+        
+        if result.get("success"):
+            content = result.get("content", "")
+            view = RegenerateView(self.cog, self.prompt, model, self.original_ctx)
+            await interaction.followup.send(f"**Model: {model}**\n\n{content[:1900]}", view=view)
+        else:
+            await interaction.followup.send(f"❌ Failed with model {model}: {result.get('error')}")
+
+# Then update your ask_command to use these:
+async def ask_command(self, ctx, *, argument_string=None):
+    # ... existing parsing code ...
+    
+    result = await self.try_all_chat_endpoints(prompt, model_to_use)
+    
+    if result.get("success"):
+        content = result.get("content", "")
+        # Create UI components
+        view = RegenerateView(self, prompt, model_to_use, ctx)
+        await ctx.send(content[:1900], view=view)
+        
+        # Optional: Add model selection button
+        model_view = ModelSelectView(self, prompt, ctx)
+        await ctx.send("Try with a different model:", view=model_view)
+    else:
+        # ... error handling ...
+
+class OpenWebUICog(commands.Cog, name="OpenWebUI"):
+    def __init__(self, bot):
+        self.bot = bot
+        # ... existing code ...
+        
+        # Store conversations by user ID
+        self.conversations = {}
+        # Set conversation expiry (e.g., 30 minutes of inactivity)
+        self.conversation_timeout = 1800
+        # Schedule cleanup task
+        self.cleanup_task = self.bot.loop.create_task(self.cleanup_old_conversations())
+        
+    def cog_unload(self):
+        # Cancel cleanup task when cog is unloaded
+        if self.cleanup_task:
+            self.cleanup_task.cancel()
+        # ... existing cleanup code ...
+        
+    async def cleanup_old_conversations(self):
+        """Periodically clean up expired conversations."""
+        while not self.bot.is_closed():
+            try:
+                current_time = asyncio.get_event_loop().time()
+                expired_users = []
+                
+                for user_id, convo in self.conversations.items():
+                    if current_time - convo["last_updated"] > self.conversation_timeout:
+                        expired_users.append(user_id)
+                        
+                for user_id in expired_users:
+                    del self.conversations[user_id]
+                    
+                if expired_users:
+                    logger.info(f"Cleaned up {len(expired_users)} expired conversations")
+                    
+                await asyncio.sleep(300)  # Check every 5 minutes
+            except Exception as e:
+                logger.error(f"Error in conversation cleanup: {e}")
+                await asyncio.sleep(60)  # Retry sooner if there was an error
+    
+    async def send_prompt_to_api(self, prompt, model, endpoint_override=None, conversation_history=None):
+        """Extended to support conversation history."""
+        # ... existing setup code ...
+        
+        # Prepare payload with conversation history if provided
+        if conversation_history:
+            payload = {
+                "model": model,
+                "messages": conversation_history + [{"role": "user", "content": prompt}],
+                "stream": False
+            }
+        else:
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False
+            }
+            
+        # ... rest of the existing method ...
+    
+    # New method to get a user's conversation or create one
+    def get_conversation(self, user_id):
+        if user_id not in self.conversations:
+            self.conversations[user_id] = {
+                "messages": [],
+                "last_updated": asyncio.get_event_loop().time(),
+                "model": self.default_model
+            }
+        return self.conversations[user_id]
+    
+    # New method to update a conversation
+    def update_conversation(self, user_id, user_msg, assistant_msg, model=None):
+        convo = self.get_conversation(user_id)
+        convo["messages"].append({"role": "user", "content": user_msg})
+        convo["messages"].append({"role": "assistant", "content": assistant_msg})
+        convo["last_updated"] = asyncio.get_event_loop().time()
+        if model:
+            convo["model"] = model
+            
+    # Command to clear conversation history
+    @commands.command(name="clear_chat", help="Clear your conversation history with the bot")
+    async def clear_conversation(self, ctx):
+        user_id = str(ctx.author.id)
+        if user_id in self.conversations:
+            del self.conversations[user_id]
+            await ctx.send("✅ Your conversation history has been cleared.")
+        else:
+            await ctx.send("No active conversation found.")
+            
+    # Updated ask command to use conversation history
+    @commands.command(name='ask', aliases=['chat', 'llm'], help='Ask a question to the configured LLM.')
+    async def ask_command(self, ctx, *, argument_string=None):
+        # ... existing parsing logic ...
+        
+        # Get user's conversation
+        user_id = str(ctx.author.id)
+        convo = self.get_conversation(user_id)
+        
+        # Use conversation history with the API
+        async with ctx.typing():
+            result = await self.try_all_chat_endpoints(
+                prompt, 
+                model_to_use,
+                conversation_history=convo["messages"]
+            )
+            
+            if result.get("success"):
+                content = result.get("content", "")
+                # Update conversation with the new exchange
+                self.update_conversation(user_id, prompt, content, model_to_use)
+                # ... rest of success handling ...
+            else:
+                # ... error handling ...
+
+class RateLimiter:
+    def __init__(self, max_calls, period, bot):
+        self.max_calls = max_calls       # Maximum calls allowed in the period
+        self.period = period             # Time period in seconds
+        self.bot = bot                   # For access to bot features like DMs
+        self.calls = defaultdict(list)   # Dict of user_id -> list of timestamps
+    
+    def is_rate_limited(self, user_id):
+        """Check if a user is currently rate limited."""
+        current_time = time.time()
+        # Clear outdated calls
+        self.calls[user_id] = [t for t in self.calls[user_id] 
+                              if current_time - t < self.period]
+        
+        # Check if user exceeds the limit
+        return len(self.calls[user_id]) >= self.max_calls
+    
+    def add_call(self, user_id):
+        """Register a call for the user."""
+        self.calls[user_id].append(time.time())
+    
+    def time_remaining(self, user_id):
+        """Get seconds until the user can make another call."""
+        if not self.is_rate_limited(user_id):
+            return 0
+            
+        current_time = time.time()
+        oldest_call = min(self.calls[user_id])
+        return int(self.period - (current_time - oldest_call)) + 1  # +1 for safety
+
+# Add to OpenWebUICog
+class OpenWebUICog(commands.Cog, name="OpenWebUI"):
+    def __init__(self, bot):
+        self.bot = bot
+        # ... existing initialization ...
+        
+        # Create rate limiters for different operations
+        self.ask_limiter = RateLimiter(5, 60, bot)   # 5 calls per minute
+        self.model_list_limiter = RateLimiter(10, 60, bot)  # 10 calls per minute
+        
+    @commands.command(name='ask')
+    async def ask_command(self, ctx, *, argument_string=None):
+        user_id = str(ctx.author.id)
+        
+        # Check if user is rate limited
+        if self.ask_limiter.is_rate_limited(user_id):
+            time_left = self.ask_limiter.time_remaining(user_id)
+            await ctx.send(f"⏳ Rate limit reached. Please try again in {time_left} seconds.", 
+                          delete_after=10)
+            return
+            
+        # Register this call
+        self.ask_limiter.add_call(user_id)
+
+# In cogs/openwebui_cog.py - Add hybrid or app commands
+class OpenWebUICog(commands.Cog, name="OpenWebUI"):
+    def __init__(self, bot):
+        self.bot = bot
+        # ... existing code ...
+        
+    # This creates both a traditional !ask command and a /ask slash command
+    @commands.hybrid_command(name='ask', description="Ask a question to the configured LLM.")
+    async def ask_command(self, ctx, 
+                          model: Optional[str] = None, 
+                          *, prompt: str):
+        """
+        Sends a prompt to the configured OpenWebUI LLM.
+        
+        Parameters
+        ----------
+        model: Optional[str]
+            The model to use for generating the response. If not provided, uses the default model.
+        prompt: str
+            The prompt to send to the LLM.
+        """
+        # Get the actual model to use
+        model_to_use = model or self.default_model
+        
+        # Rest of your implementation...
+        # ...
+
+    # A pure slash command (no prefix equivalent)
+    @bot.tree.command(name="openwebui_models", description="List available models from OpenWebUI")
+    async def list_models_slash(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+        # Implementation similar to your existing list_models command
+        # but adapted for Interactions API
+        # ...
+        await interaction.followup.send(content=models_str)
+        
 # --- Setup Function ---
 async def setup(bot: commands.Bot):
     """Standard setup function to load the Cog."""
