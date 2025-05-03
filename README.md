@@ -45,7 +45,7 @@ A Discord bot for the OpenWebUI community, providing LLM interactions, documenta
 ### Environment Setup
 1. Clone the repository
    ```bash
-   git clone https://github.com/yourusername/monolith-discord-bot.git
+   git clone https://github.com/pkeffect/oi_discord_bot.git
    cd monolith-discord-bot
    ```
 
