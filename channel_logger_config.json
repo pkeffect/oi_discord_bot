@@ -5,11 +5,7 @@
   "media_directory": "./data/channel_logs/media",
   "servers": {
     "180928662504341504": [
-      "1230331246425411615",
-      "YOUR_CHANNEL_ID_1B"
-    ],
-    "YOUR_SERVER_ID_2": [
-      "YOUR_CHANNEL_ID_2A"
+      "1230331246425411615"
     ]
   }
 }

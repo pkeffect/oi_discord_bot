@@ -875,38 +875,38 @@ async def send_prompt_to_api(self, prompt: str, model: str, endpoint_override: O
                 "status_code": status_code, "endpoint": api_endpoint
             }
 
-    async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
-        """
-        Tries the primary chat endpoint, then alternatives, returning the first success or aggregated errors.
+async def try_all_chat_endpoints(self, prompt: str, model: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """
+    Tries the primary chat endpoint, then alternatives, returning the first success or aggregated errors.
         
-        Args:
-            prompt: The prompt to send
-            model: The model to use
-            conversation_history: Optional conversation history to include
+    Args:
+        prompt: The prompt to send
+        model: The model to use
+        conversation_history: Optional conversation history to include
             
-        Returns:
-            Dict containing the result
-        """
-        # Deduplicate endpoints (in case default is also in alternatives)
-        endpoints_to_try = [self.api_endpoint] + [ep for ep in self.alternative_endpoints if ep != self.api_endpoint]
-        attempt_results = {}
+    Returns:
+        Dict containing the result
+    """
+    # Deduplicate endpoints (in case default is also in alternatives)
+    endpoints_to_try = [self.api_endpoint] + [ep for ep in self.alternative_endpoints if ep != self.api_endpoint]
+    attempt_results = {}
 
-        for i, endpoint in enumerate(endpoints_to_try):
-            logger.info(f"Attempting chat request to endpoint #{i+1}/{len(endpoints_to_try)}: {endpoint}")
-            result = await self.send_prompt_to_api(prompt, model, endpoint_override=endpoint, conversation_history=conversation_history)
-            attempt_results[endpoint] = result  # Store result for this endpoint
+    for i, endpoint in enumerate(endpoints_to_try):
+        logger.info(f"Attempting chat request to endpoint #{i+1}/{len(endpoints_to_try)}: {endpoint}")
+        result = await self.send_prompt_to_api(prompt, model, endpoint_override=endpoint, conversation_history=conversation_history)
+        attempt_results[endpoint] = result  # Store result for this endpoint
 
-            if result.get("success"):
-                logger.info(f"Successfully got chat response from endpoint: {endpoint}. Setting as primary for future requests.")
-                self.api_endpoint = endpoint  # Update the default endpoint to the working one
-                return result  # Return the successful result immediately
-
-            else:
-                logger.warning(f"Chat request failed for endpoint {endpoint}: {result.get('error')} ({result.get('status_code', 'N/A')}) - {result.get('details')}")
-                # Don't stop, try the next endpoint unless it's an auth error that will likely repeat
-                if result.get("status_code") in [401, 403]:
-                    logger.warning("Authentication error detected. Subsequent endpoint attempts might also fail.")
-                    # Consider stopping early if needed, but for now we try all
+        if result.get("success"):
+            logger.info(f"Successfully got chat response from endpoint: {endpoint}. Setting as primary for future requests.")
+            self.api_endpoint = endpoint  # Update the default endpoint to the working one
+            return result  # Return the successful result immediately
+                
+        else:
+            logger.warning(f"Chat request failed for endpoint {endpoint}: {result.get('error')} ({result.get('status_code', 'N/A')}) - {result.get('details')}")
+            # Don't stop, try the next endpoint unless it's an auth error that will likely repeat
+            if result.get("status_code") in [401, 403]:
+                logger.warning("Authentication error detected. Subsequent endpoint attempts might also fail.")
+                # Consider stopping early if needed, but for now we try all
 
         # If loop finishes, all endpoints failed
         logger.error("All configured chat API endpoints failed.")
