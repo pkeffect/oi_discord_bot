@@ -1,3 +1,4 @@
+# compose.yaml
 # https://www.yamllint.com/ - YAML Validator
 # https://docs.docker.com/compose/ - Docker Compose
 
@@ -8,7 +9,12 @@ services:
       context: .
       dockerfile: Dockerfile
     volumes:
-      - .:/app  # Mounts the current directory to /app in the container
+      # Mount only specific directories instead of the entire app
+      - ./data:/app/data  # For persistent data
+      - ./logs:/app/logs  # For logs
+      # Config files
+      - ./.env:/app/.env:ro  # Read-only env file
+      - ./channel_logger_config.json:/app/channel_logger_config.json
     environment:
       - 'DISCORD_TOKEN=${DISCORD_TOKEN}'
       - 'DOCS_ZIP_URL=${DOCS_ZIP_URL}'
@@ -19,12 +25,28 @@ services:
       - 'OPENWEBUI_API_KEY=${OPENWEBUI_API_KEY}'
       - 'OPENWEBUI_JWT_TOKEN=${OPENWEBUI_JWT_TOKEN}'
       - 'OLLAMA_API_URL=${OLLAMA_API_URL}'
+      - 'PYTHONUNBUFFERED=1'  # Ensure logs are output immediately
     restart: unless-stopped
     extra_hosts:
-      - "host.docker.internal:host-gateway"    
+      - "host.docker.internal:host-gateway"
     networks:
       - "hyperspace" 
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
       
 networks:
   hyperspace:
-    external: true    
+    external: true
+    name: hyperspace  # Explicit name
+  # Fallback network if hyperspace is not available
+  default:
+    driver: bridge

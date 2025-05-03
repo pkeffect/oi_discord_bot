@@ -9,8 +9,10 @@ import json
 import asyncio
 import socket
 import os
-from urllib.parse import urljoin, urlparse
 import time
+import re
+import base64
+from urllib.parse import urljoin, urlparse
 from collections import defaultdict
 from typing import Dict, List, Optional, Union, Tuple, Any, DefaultDict
 
@@ -22,6 +24,126 @@ API_TIMEOUT_SECONDS = 180  # 3 minutes for potentially long LLM responses
 MAX_RESPONSE_LENGTH = 1950  # Discord message limit is 2000, leave a buffer
 CONNECTION_TIMEOUT = 15  # Seconds to wait for initial connection & simple requests
 DIAGNOSTIC_TIMEOUT = 10  # Shorter timeout for diagnostic checks
+SECRET_MASK_PATTERN = r"eyJ|sk-|pk-|xf-|fk-|ak-|mk-|lk-"  # Common API key prefixes
+
+class SecurityUtils:
+    """
+    Utility class for security-related functions.
+    Handles sensitive data masking and validation.
+    """
+    
+    @staticmethod
+    def mask_sensitive_value(value: str) -> str:
+        """
+        Returns a securely masked version of a sensitive value.
+        
+        Args:
+            value: The sensitive value to mask
+            
+        Returns:
+            str: A masked representation of the value
+        """
+        if not value:
+            return "<empty>"
+        
+        # Check if it's potentially a JWT or API key with common patterns
+        if re.search(SECRET_MASK_PATTERN, value):
+            # Show minimal parts for keys that match known patterns
+            if len(value) <= 8:
+                return "***" 
+            else:
+                # Show only first 3 and last 3 characters
+                return f"{value[:3]}...{value[-3:]}"
+        else:
+            # For other strings, show more context but still mask
+            if len(value) <= 6:
+                return "***" 
+            elif len(value) <= 12:
+                return f"{value[:2]}...{value[-2:]}"
+            else:
+                return f"{value[:3]}...{value[-3:]}"
+        
+    @staticmethod
+    def is_valid_jwt_format(token: str) -> bool:
+        """
+        Performs basic validation of JWT token format (without verifying signature).
+        
+        Args:
+            token: The JWT token to validate
+            
+        Returns:
+            bool: True if token has valid JWT format, False otherwise
+        """
+        if not token:
+            return False
+            
+        # JWT format: header.payload.signature
+        parts = token.split('.')
+        if len(parts) != 3:
+            return False
+            
+        # Check if all parts look like base64url encoded strings
+        try:
+            for part in parts[:2]:  # Only check header and payload
+                # Add padding if needed
+                padding = '=' * (4 - len(part) % 4) if len(part) % 4 != 0 else ''
+                # Replace URL-safe chars and add padding
+                part = part.replace('-', '+').replace('_', '/') + padding
+                # Try to decode
+                base64.b64decode(part)
+            return True
+        except Exception:
+            return False
+    
+    @staticmethod
+    def sanitize_url_for_logging(url: str) -> str:
+        """
+        Sanitizes URLs that might contain tokens or keys in the query string.
+        
+        Args:
+            url: The URL to sanitize
+            
+        Returns:
+            str: Sanitized URL with potential credentials masked
+        """
+        if not url:
+            return "<empty_url>"
+            
+        try:
+            parsed = urlparse(url)
+            # Check for credentials in netloc (user:pass@hostname)
+            if '@' in parsed.netloc:
+                # Mask username/password in URL
+                userpass, host = parsed.netloc.split('@', 1)
+                parsed = parsed._replace(netloc=f"***@{host}")
+                
+            # Check and mask tokens in query parameters
+            if parsed.query:
+                query_parts = parsed.query.split('&')
+                sanitized_parts = []
+                
+                for part in query_parts:
+                    if '=' in part:
+                        key, value = part.split('=', 1)
+                        # Check if parameter might be sensitive
+                        if any(s in key.lower() for s in ['key', 'token', 'secret', 'password', 'auth']):
+                            if value:
+                                sanitized_parts.append(f"{key}=***")
+                            else:
+                                sanitized_parts.append(part)
+                        else:
+                            sanitized_parts.append(part)
+                    else:
+                        sanitized_parts.append(part)
+                
+                # Rebuild the URL with sanitized query
+                parsed = parsed._replace(query='&'.join(sanitized_parts))
+                
+            return parsed.geturl()
+        except Exception:
+            # If parsing fails, just return a generic masked URL
+            return re.sub(r'(https?://[^/?#]+)(.*)', r'\1/***', url)
+
 
 class RateLimiter:
     """
@@ -29,19 +151,20 @@ class RateLimiter:
     Tracks calls by user and enforces limits.
     """
     
-    def __init__(self, max_calls: int, period: int, bot: commands.Bot):
+    def __init__(self, max_calls: int, period: int, name: str = "default"):
         """
         Initialize rate limiter.
         
         Args:
             max_calls: Maximum calls allowed in the period
             period: Time period in seconds
-            bot: The bot instance
+            name: Name identifier for this rate limiter instance
         """
         self.max_calls = max_calls
         self.period = period
-        self.bot = bot
+        self.name = name
         self.calls: DefaultDict[str, List[float]] = defaultdict(list)
+        logger.info(f"Initialized RateLimiter '{name}': {max_calls} calls per {period} seconds")
     
     def is_rate_limited(self, user_id: str) -> bool:
         """
@@ -69,6 +192,7 @@ class RateLimiter:
             user_id: The user ID to add a call for
         """
         self.calls[user_id].append(time.time())
+        logger.debug(f"RateLimiter '{self.name}': Added call for user {user_id}, now at {len(self.calls[user_id])}/{self.max_calls}")
     
     def time_remaining(self, user_id: str) -> int:
         """
@@ -85,7 +209,18 @@ class RateLimiter:
             
         current_time = time.time()
         oldest_call = min(self.calls[user_id])
-        return int(self.period - (current_time - oldest_call)) + 1  # +1 for safety
+        return max(1, int(self.period - (current_time - oldest_call)) + 1)  # +1 for safety
+    
+    def reset_user(self, user_id: str) -> None:
+        """
+        Reset the rate limit for a specific user.
+        
+        Args:
+            user_id: The user ID to reset
+        """
+        if user_id in self.calls:
+            del self.calls[user_id]
+            logger.debug(f"RateLimiter '{self.name}': Reset rate limit for user {user_id}")
 
 
 class RegenerateView(discord.ui.View):
@@ -125,9 +260,23 @@ class RegenerateView(discord.ui.View):
         
         if result.get("success"):
             content = result.get("content", "")
-            await interaction.followup.send(content[:1999])  # Respect Discord limits
+            # Create a new regenerate view for the new response
+            new_view = RegenerateView(self.cog, self.prompt, self.model, self.original_ctx)
+            
+            if len(content) <= MAX_RESPONSE_LENGTH:
+                await interaction.followup.send(content, view=new_view)
+            else:
+                # Truncate and indicate it was truncated
+                truncated_content = content[:MAX_RESPONSE_LENGTH] + "\n\n*[Response truncated due to Discord length limit]*"
+                await interaction.followup.send(truncated_content, view=new_view)
         else:
-            await interaction.followup.send(f"❌ Failed to regenerate: {result.get('error')}")
+            # Format error message
+            error_embed = self.cog.create_error_embed(
+                result.get('error', 'Unknown Error'),
+                f"Failed to regenerate response using model {self.model}",
+                result.get('details', 'No details available.')
+            )
+            await interaction.followup.send(embed=error_embed)
 
 
 class ModelSelectView(discord.ui.View):
@@ -158,9 +307,12 @@ class ModelSelectView(discord.ui.View):
         for model in available_models[:24]:  # 25 total including Default
             if len(model) > 25:  # Discord option label length limit
                 label = model[:22] + "..."
+                description = f"Model: {model}"[:100]  # Limit description length
             else:
                 label = model
-            options.append(discord.SelectOption(label=label, value=model))
+                description = None
+                
+            options.append(discord.SelectOption(label=label, value=model, description=description))
         
         # Add the select menu to the view
         self.add_item(ModelSelector(options, self.cog, self.prompt))
@@ -210,9 +362,21 @@ class ModelSelector(discord.ui.Select):
         if result.get("success"):
             content = result.get("content", "")
             view = RegenerateView(self.cog, self.prompt, model, interaction)
-            await interaction.followup.send(f"**Model: {model}**\n\n{content[:1900]}", view=view)
+            
+            if len(content) <= MAX_RESPONSE_LENGTH:
+                await interaction.followup.send(f"**Model: {model}**\n\n{content}", view=view)
+            else:
+                # Truncate and indicate it was truncated
+                truncated_content = content[:MAX_RESPONSE_LENGTH] + "\n\n*[Response truncated due to Discord length limit]*" 
+                await interaction.followup.send(f"**Model: {model}**\n\n{truncated_content}", view=view)
         else:
-            await interaction.followup.send(f"❌ Failed with model {model}: {result.get('error')}")
+            # Format error message
+            error_embed = self.cog.create_error_embed(
+                result.get('error', 'Unknown Error'),
+                f"Failed with model {model}",
+                result.get('details', 'No details available.')
+            )
+            await interaction.followup.send(embed=error_embed)
 
 
 class OpenWebUICog(commands.Cog, name="OpenWebUI"):
@@ -229,36 +393,26 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             bot: The bot instance
         """
         self.bot = bot
+        # Access config from the bot instance
         self.config = getattr(bot, 'config', {})
+        if hasattr(bot, 'config_manager'):
+            self.config_manager = bot.config_manager
+        else:
+            self.config_manager = None
 
         # --- Configuration Loading ---
-        self.api_base_url = self.config.get("OPENWEBUI_API_URL")
-        self.default_model = self.config.get("OPENWEBUI_DEFAULT_MODEL")
+        self.api_base_url = self.config.get("openwebui_api_url")
+        self.default_model = self.config.get("openwebui_default_model")
 
         self.api_key = None
         self.jwt_token = None
 
-        # Log available keys for easier debugging if values are missing
-        logger.debug("Available configuration keys from bot config:")
-        for key in sorted(self.config.keys()):
-            value_preview = str(self.config.get(key))
-            if value_preview is not None and ('key' in key.lower() or 'token' in key.lower() or 'password' in key.lower() or 'secret' in key.lower()):
-                if len(value_preview) > 8:
-                    value_preview = f"{value_preview[:3]}...{value_preview[-3:]} (masked)"
-                elif len(value_preview) > 0:
-                    value_preview = "(masked)"
-                else:
-                    value_preview = "'' (empty/masked)"
-            elif value_preview is None:
-                value_preview = "`None`"
-            logger.debug(f"  - {key}: {value_preview}")
-
         # Flexible Authentication Key/Token Discovery
         possible_api_key_names = [
-            "OPENWEBUI_API_KEY", "OPEN_WEBUI_API_KEY", "OPENWEBUI_TOKEN",
-            "OPEN_WEBUI_TOKEN", "API_KEY"
+            "openwebui_api_key", "open_webui_api_key", "openwebui_token",
+            "open_webui_token", "api_key"
         ]
-        possible_jwt_names = ["OPENWEBUI_JWT_TOKEN", "OPEN_WEBUI_JWT_TOKEN", "JWT_TOKEN"]
+        possible_jwt_names = ["openwebui_jwt_token", "open_webui_jwt_token", "jwt_token"]
 
         # Prioritize API Key
         for key_name in possible_api_key_names:
@@ -283,15 +437,6 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             self.jwt_token = self.api_key
             self.api_key = None
 
-        # Log final authentication status
-        if self.api_key:
-            logger.info(f"Using API Key authentication (length: {len(self.api_key)}).")
-        elif self.jwt_token:
-            logger.info(f"Using JWT Token authentication (length: {len(self.jwt_token)}).")
-        else:
-            logger.warning("No API Key or JWT Token configured. Requests will be sent unauthenticated.")
-            logger.warning("If your OpenWebUI requires authentication, commands will likely fail.")
-
         # --- API Endpoint Configuration ---
         # Default endpoint (OpenAI compatible, often preferred)
         self.api_endpoint = "/api/chat/completions"
@@ -310,8 +455,8 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         self.cleanup_task = self.bot.loop.create_task(self.cleanup_old_conversations())
         
         # --- Rate Limiting ---
-        self.ask_limiter = RateLimiter(5, 60, bot)  # 5 calls per minute
-        self.model_list_limiter = RateLimiter(10, 60, bot)  # 10 calls per minute
+        self.ask_limiter = RateLimiter(5, 60, "ask_command")  # 5 calls per minute
+        self.model_list_limiter = RateLimiter(10, 60, "model_list")  # 10 calls per minute
 
         # Validate configuration on initialization
         self._validate_config()
@@ -326,7 +471,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
 
     def _validate_config(self) -> None:
         """
-        Performs initial validation of essential configuration.
+        Performs initial validation of essential configuration and securely logs configuration state.
         """
         if not self.api_base_url:
             logger.error("CRITICAL: OPENWEBUI_API_URL is not configured in the bot's config!")
@@ -339,6 +484,25 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         else:
             logger.warning("OPENWEBUI_DEFAULT_MODEL is not set. Users must specify a model ID in the `!ask` command.")
 
+        # Log authentication configuration securely
+        if self.api_key:
+            masked_key = SecurityUtils.mask_sensitive_value(self.api_key)
+            logger.info(f"Using API Key authentication (masked: {masked_key})")
+            
+            # Validate API key format
+            if len(self.api_key) < 8:
+                logger.warning("API Key seems unusually short. This may not be a valid key.")
+        elif self.jwt_token:
+            masked_token = SecurityUtils.mask_sensitive_value(self.jwt_token)
+            logger.info(f"Using JWT Token authentication (masked: {masked_token})")
+            
+            # Basic JWT structure validation (header.payload.signature)
+            if not SecurityUtils.is_valid_jwt_format(self.jwt_token):
+                logger.warning("JWT Token does not appear to have a valid format (header.payload.signature).")
+        else:
+            logger.warning("No API Key or JWT Token configured. Requests will be sent unauthenticated.")
+            logger.warning("If your OpenWebUI requires authentication, commands will likely fail.")
+
         # Basic URL Parsing Check
         try:
             parsed_url = urlparse(self.api_base_url)
@@ -349,6 +513,10 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                 # Log potential Docker-specific hostnames
                 if parsed_url.hostname in ('host.docker.internal', 'docker.host.internal'):
                     logger.warning(f"Using Docker-specific hostname '{parsed_url.hostname}'. Ensure proper Docker network setup between bot and OpenWebUI containers.")
+                
+                # Security recommendation for production use
+                if parsed_url.scheme == 'http' and not parsed_url.hostname in ('localhost', '127.0.0.1'):
+                    logger.warning("Using unencrypted HTTP for a non-localhost connection. Consider using HTTPS for better security.")
         except ValueError as e:
             logger.error(f"Error parsing OPENWEBUI_API_URL '{self.api_base_url}': {e}")
 
@@ -372,6 +540,9 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                     logger.info(f"Cleaned up {len(expired_users)} expired conversations")
                     
                 await asyncio.sleep(300)  # Check every 5 minutes
+            except asyncio.CancelledError:
+                logger.info("Conversation cleanup task cancelled")
+                break
             except Exception as e:
                 logger.error(f"Error in conversation cleanup: {e}")
                 await asyncio.sleep(60)  # Retry sooner if there was an error
@@ -503,12 +674,19 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             headers['Authorization'] = f"Bearer {self.api_key}"  # Standard Bearer for API keys too
             auth_method = "API Key"
 
-        logger.debug(f"Making {method} request to: {full_url}")
+        safe_url = SecurityUtils.sanitize_url_for_logging(full_url)
+        logger.debug(f"Making {method} request to: {safe_url}")
         logger.debug(f"Auth Method: {auth_method}")
+        
         if payload:
             # Avoid logging potentially large prompts directly, show structure/keys
-            payload_preview = {k: (v if not isinstance(v, list) and len(str(v)) < 100 else f"<{type(v).__name__}>") for k, v in payload.items()}
-            logger.debug(f"Payload Preview: {json.dumps(payload_preview)}")
+            if "messages" in payload and isinstance(payload["messages"], list):
+                messages_info = f"[{len(payload['messages'])} messages]"
+                log_payload = {**payload, "messages": messages_info}
+            else:
+                log_payload = payload
+                
+            logger.debug(f"Payload: {json.dumps(log_payload)}")
 
         request_timeout = timeout_secs if timeout_secs is not None else API_TIMEOUT_SECONDS
 
@@ -518,7 +696,12 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                     status_code = response.status
                     response_text = await response.text()
                     logger.debug(f"Response Status: {status_code}")
-                    logger.debug(f"Response Body Preview: {response_text[:500]}{'...' if len(response_text) > 500 else ''}")
+                    
+                    # Log response preview, but avoid logging too much data
+                    if len(response_text) > 500:
+                        logger.debug(f"Response Body Preview (truncated): {response_text[:500]}...")
+                    else:
+                        logger.debug(f"Response Body: {response_text}")
 
                     # Attempt to parse JSON, return text if it fails
                     try:
@@ -546,7 +729,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             logger.error(f"Unexpected error during {method} request to {endpoint}: {e}", exc_info=True)
             return 500, {"error": "Unexpected server error", "details": str(e)}
 
-    async def send_prompt_to_api(self, prompt: str, model: str, endpoint_override: Optional[str] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+async def send_prompt_to_api(self, prompt: str, model: str, endpoint_override: Optional[str] = None, conversation_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """
         Sends a prompt to the OpenWebUI API, handling endpoint selection and response parsing.
         
@@ -746,6 +929,37 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             "all_results": attempt_results  # Include detailed results for debugging
         }
 
+    def create_error_embed(self, title: str, description: str, details: str) -> discord.Embed:
+        """
+        Creates a standardized error embed for consistent error reporting.
+        
+        Args:
+            title: Error title
+            description: Short error description
+            details: Detailed error message
+            
+        Returns:
+            discord.Embed: Formatted error embed
+        """
+        embed = discord.Embed(
+            title=f"❌ {title}",
+            description=description,
+            color=discord.Color.red()
+        )
+        
+        # Add details, limiting length
+        details_field_value = details
+        if len(details_field_value) > 1020:
+            details_field_value = details_field_value[:1020] + "..."
+        embed.add_field(name="Details", value=f"```{details_field_value}```", inline=False)
+        
+        embed.add_field(name="Troubleshooting", value="Try `!diagnose_api` or `!openwebui_models` for more information.", inline=False)
+        
+        # Add timestamp for error reference
+        embed.timestamp = datetime.datetime.now()
+        
+        return embed
+
     # --- Discord Commands ---
     @commands.command(name='ask', aliases=['chat', 'llm'], help='Ask a question to the configured LLM.\nUsage: `!ask [optional_model_id] <your prompt>`')
     async def ask_command(self, ctx: Context, *, argument_string: Optional[str] = None) -> None:
@@ -835,19 +1049,12 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                     error_details = result.get('details', 'No details provided.')
                     logger.error(f"Failed ask command: {error_title} - Details: {error_details[:500]}...")
 
-                    # Format a user-friendly error message
-                    error_embed = discord.Embed(
-                        title=f"❌ API Error: {error_title}",
-                        description=f"Failed to get a response from the OpenWebUI API for model `{model_to_use}`.",
-                        color=discord.Color.red()
+                    # Format a user-friendly error message using the standard method
+                    error_embed = self.create_error_embed(
+                        error_title,
+                        f"Failed to get a response from the OpenWebUI API for model `{model_to_use}`.",
+                        error_details
                     )
-                    # Add details, limiting length
-                    details_field_value = error_details
-                    if len(details_field_value) > 1020:
-                        details_field_value = details_field_value[:1020] + "..."
-                    error_embed.add_field(name="Details", value=f"```{details_field_value}```", inline=False)
-
-                    error_embed.add_field(name="Troubleshooting", value=f"Try `!diagnose_api` or `!openwebui_models`.", inline=True)
 
                     # Add specific advice based on error patterns
                     if "Authentication Error" in error_title:
@@ -953,16 +1160,18 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                         available_models.extend(model_names)
                                 
                         models_str = f"## Available Models (from `{endpoint}`)\n\n"
-                        for model in sorted(models_list, key=lambda x: x.get('name', '')):  # Sort alphabetically
+                        for model in sorted(models_list, key=lambda x: x.get('name', '') or x.get('id', '')):  # Sort alphabetically
                             name = model.get('name') or model.get('id', 'Unknown ID')
                             details = []
                             # Add size if available (Ollama format)
-                            if 'size' in model and isinstance(model['size'], int):
+                            if 'size' in model and isinstance(model['size'], (int, float)):
                                 gb_size = model['size'] / (1024**3)
                                 details.append(f"{gb_size:.2f} GB")
                             # Add modified time if available (Ollama format)
                             if 'modified_at' in model:
-                                details.append(f"Modified: {model['modified_at'][:10]}")  # Date only
+                                mod_at = model['modified_at']
+                                if isinstance(mod_at, str) and len(mod_at) >= 10:
+                                    details.append(f"Modified: {mod_at[:10]}")  # Date only
                             # Add owner if available (OpenAI format)
                             if 'owned_by' in model:
                                 details.append(f"Owner: {model['owned_by']}")
@@ -1116,7 +1325,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                     # Use appropriate method/payload for chat endpoint test
                     is_chat_endpoint = "chat" in endpoint.lower()
                     if is_chat_endpoint:
-                        method = "POST"
+method = "POST"
                         # Use default model if set, otherwise a placeholder that *might* fail but tests the endpoint
                         test_model = self.default_model or "test-model-for-diag"
                         payload = {"model": test_model, "messages": [{"role": "user", "content": "ping"}], "stream": False}
@@ -1203,6 +1412,9 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                     recommendations = "✅ No major issues detected based on these tests. If problems persist, check OpenWebUI server logs."
 
                 report_embed.add_field(name="Recommendations", value=recommendations, inline=False)
+                
+                # Add timestamp for reference
+                report_embed.timestamp = datetime.datetime.now()
 
                 # --- Edit the bot's message with final report ---
                 await status_message.edit(content="Diagnostics Complete.", embed=report_embed)
@@ -1235,12 +1447,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
                 # Mask sensitive values aggressively
                 masked_value = str(value)
                 if value is not None and ('key' in key.lower() or 'token' in key.lower() or 'secret' in key.lower() or 'password' in key.lower()):
-                    if len(masked_value) > 6:
-                        masked_value = f"{masked_value[:3]}...{masked_value[-3:]} (masked)"
-                    elif len(masked_value) > 0:
-                        masked_value = "*** (masked)"
-                    else:
-                        masked_value = "'' (empty/masked)"
+                    masked_value = SecurityUtils.mask_sensitive_value(masked_value)
                 elif value is None:
                     masked_value = "`None`"
 
@@ -1256,8 +1463,8 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         env_report += "\n### Cog Internal State\n"
         env_report += f"- `api_base_url`: `{self.api_base_url or 'Not Set'}`\n"
         env_report += f"- `default_model`: `{self.default_model or 'Not Set'}`\n"
-        api_key_status = f"`{self.api_key[:3]}...{self.api_key[-3:]}` (masked)" if self.api_key and len(self.api_key) > 6 else ("`Set (short/masked)`" if self.api_key else "`Not Set`")
-        jwt_token_status = f"`{self.jwt_token[:3]}...{self.jwt_token[-3:]}` (masked)" if self.jwt_token and len(self.jwt_token) > 6 else ("`Set (short/masked)`" if self.jwt_token else "`Not Set`")
+        api_key_status = SecurityUtils.mask_sensitive_value(self.api_key) if self.api_key else "`Not Set`"
+        jwt_token_status = SecurityUtils.mask_sensitive_value(self.jwt_token) if self.jwt_token else "`Not Set`"
         env_report += f"- `api_key`: {api_key_status}\n"
         env_report += f"- `jwt_token`: {jwt_token_status}\n"
         env_report += f"- `current_chat_endpoint`: `{self.api_endpoint}`\n"
@@ -1271,18 +1478,45 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             if any(part in key.upper() for part in relevant_prefixes):
                 found_env_var = True
                 # Mask sensitive values
-                masked_value = str(value)
+                masked_value = value
                 if 'key' in key.lower() or 'token' in key.lower() or 'secret' in key.lower() or 'password' in key.lower():
-                    if len(masked_value) > 6:
-                        masked_value = f"{masked_value[:3]}...{masked_value[-3:]} (masked)"
-                    elif len(masked_value) > 0:
-                        masked_value = "*** (masked)"
-                    else:
-                        masked_value = "'' (empty/masked)"
+                    masked_value = SecurityUtils.mask_sensitive_value(value)
                 env_report += f"- `{key}`: `{masked_value}`\n"
 
         if not found_env_var:
             env_report += "No potentially relevant system environment variables found.\n"
+
+        # 4. Network Information (If this is helpful for debugging)
+        env_report += "\n### Network Information\n"
+        try:
+            # Get hostname
+            hostname = socket.gethostname()
+            env_report += f"- Host: `{hostname}`\n"
+            
+            # Try to get local IP addresses
+            ip_addresses = []
+            for interface in socket.getaddrinfo(socket.gethostname(), None):
+                ip = interface[4][0]
+                # Filter out loopback addresses and IPv6
+                if not ip.startswith('127.') and ':' not in ip:
+                    ip_addresses.append(ip)
+            
+            if ip_addresses:
+                env_report += f"- IP Addresses: `{', '.join(ip_addresses)}`\n"
+            else:
+                env_report += "- IP Addresses: Unable to determine\n"
+                
+            # If the OpenWebUI URL is set, try to resolve it
+            if self.api_base_url:
+                parsed_url = urlparse(self.api_base_url)
+                if parsed_url.hostname:
+                    try:
+                        resolved_ip = socket.gethostbyname(parsed_url.hostname)
+                        env_report += f"- API URL Hostname `{parsed_url.hostname}` resolves to: `{resolved_ip}`\n"
+                    except socket.gaierror:
+                        env_report += f"- API URL Hostname `{parsed_url.hostname}` could not be resolved\n"
+        except Exception as e:
+            env_report += f"- Error getting network info: {e}\n"
 
         # Send report via DM
         try:
@@ -1328,12 +1562,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         self.jwt_token = None  # Clear JWT if setting API key explicitly
         logger.info(f"API key manually set/updated by {ctx.author} (ID: {ctx.author.id}). JWT token cleared.")
 
-        masked_key = "`<empty>`"
-        if len(self.api_key) > 6:
-            masked_key = f"`{self.api_key[:3]}...{self.api_key[-3:]}`"
-        elif len(self.api_key) > 0:
-            masked_key = "`***` (short key)"
-
+        masked_key = SecurityUtils.mask_sensitive_value(self.api_key)
         confirm_msg = await ctx.send(f"✅ OpenWebUI API key has been set to {masked_key}. JWT token (if any) was cleared.")
 
         # Try to delete the user's command message containing the key
@@ -1348,6 +1577,14 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         except Exception as e:
             logger.error(f"Error deleting user message: {e}")
             await ctx.send("⚠️ An error occurred trying to delete your message containing the key.", delete_after=15)
+            
+        # If we have a config manager, update the config
+        if self.config_manager:
+            # Save the API key in the config
+            self.config_manager.set("openwebui_api_key", self.api_key, save=True)
+            # Remove JWT token in the config
+            self.config_manager.set("openwebui_jwt_token", None, save=True)
+            logger.info("Updated config file with new API key and removed JWT token.")
 
     @commands.command(name='set_jwt_token', help='(Admin Only) Manually set/update the OpenWebUI JWT token.')
     @commands.has_permissions(administrator=True)
@@ -1368,12 +1605,7 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         self.api_key = None  # Clear API key if setting JWT explicitly
         logger.info(f"JWT token manually set/updated by {ctx.author} (ID: {ctx.author.id}). API key cleared.")
 
-        masked_token = "`<empty>`"
-        if len(self.jwt_token) > 10:  # JWTs are usually long
-            masked_token = f"`{self.jwt_token[:5]}...{self.jwt_token[-5:]}`"
-        elif len(self.jwt_token) > 0:
-            masked_token = "`***` (short token)"
-
+        masked_token = SecurityUtils.mask_sensitive_value(self.jwt_token)
         confirm_msg = await ctx.send(f"✅ OpenWebUI JWT token has been set to {masked_token}. API key (if any) was cleared.")
 
         # Try to delete the user's command message containing the token
@@ -1388,6 +1620,14 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         except Exception as e:
             logger.error(f"Error deleting user message: {e}")
             await ctx.send("⚠️ An error occurred trying to delete your message containing the token.", delete_after=15)
+            
+        # If we have a config manager, update the config
+        if self.config_manager:
+            # Save the JWT token in the config
+            self.config_manager.set("openwebui_jwt_token", self.jwt_token, save=True)
+            # Remove API key in the config
+            self.config_manager.set("openwebui_api_key", None, save=True)
+            logger.info("Updated config file with new JWT token and removed API key.")
 
     @commands.command(name='test_auth', help='(Admin Only) Test configured authentication against API.')
     @commands.has_permissions(administrator=True)
@@ -1412,8 +1652,6 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             auth_header_value = f"Bearer {self.api_key}"
 
         initial_msg = await ctx.send(f"⚙️ Testing authentication (`{auth_method}`) against OpenWebUI at `{self.api_base_url}`...")
-
-# ./cogs/openwebui_cog.py (continued)
 
         # Use endpoints likely requiring auth or providing info
         test_endpoints = ["/api/me", "/api/v1/models", "/api/version"]
@@ -1466,6 +1704,9 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
             else:  # No success, no specific auth failure (e.g., all 404 or 5xx)
                 report_embed.color = discord.Color.orange()
                 report_embed.add_field(name="Conclusion", value="⚠️ Could not confirm authentication success. All tested endpoints failed for reasons other than explicit auth errors (e.g., Not Found, Server Error). Use `!diagnose_api` for more details.", inline=False)
+                
+            # Add timestamp for reference
+            report_embed.timestamp = datetime.datetime.now()
 
             try:
                 await initial_msg.edit(content="Authentication Test Complete.", embed=report_embed)
@@ -1493,16 +1734,48 @@ class OpenWebUICog(commands.Cog, name="OpenWebUI"):
         if isinstance(error, commands.MissingPermissions):
             logger.warning(f"{log_prefix} User {ctx.author} (ID: {ctx.author.id}) missing permissions: {error.missing_permissions}")
             await ctx.send("❌ You do not have the necessary permissions (Administrator) to use this command.", delete_after=10)
+            return True
         elif isinstance(error, commands.UserInputError):
             logger.info(f"{log_prefix} User input error: {error}")
             await ctx.send(f"❌ Invalid input: {error}\nPlease use `{ctx.prefix}help {ctx.command.qualified_name}` for usage details.")
+            return True
         elif isinstance(error, commands.CommandInvokeError):
             original = error.original
             logger.error(f"{log_prefix} Error during invocation: {original.__class__.__name__}: {original}", exc_info=True)  # Log full traceback
             await ctx.send(f"An unexpected error occurred while running the command: `{original.__class__.__name__}`. Please check the bot logs or contact an admin.")
+            return True
         else:
             # Log other unexpected cog-level errors
             logger.error(f"{log_prefix} Unexpected error: {error}", exc_info=True)
+            return False
+    
+    @commands.Cog.listener()
+    async def on_config_update(self, key: str, value: Any) -> None:
+        """
+        Handle dynamic configuration updates for OpenWebUI config.
+        
+        Args:
+            key: The configuration key that was updated
+            value: The new value
+        """
+        if key == "openwebui_api_url":
+            logger.info(f"OpenWebUI API URL updated to: {value}")
+            self.api_base_url = value
+        elif key == "openwebui_default_model":
+            logger.info(f"OpenWebUI default model updated to: {value}")
+            self.default_model = value
+        elif key == "openwebui_api_key":
+            masked_value = SecurityUtils.mask_sensitive_value(value) if value else "None"
+            logger.info(f"OpenWebUI API key updated to: {masked_value}")
+            self.api_key = value
+            if value:  # If setting API key, clear JWT token for clarity
+                self.jwt_token = None
+        elif key == "openwebui_jwt_token":
+            masked_value = SecurityUtils.mask_sensitive_value(value) if value else "None"
+            logger.info(f"OpenWebUI JWT token updated to: {masked_value}")
+            self.jwt_token = value
+            if value:  # If setting JWT token, clear API key for clarity
+                self.api_key = None
 
 
 async def setup(bot: commands.Bot) -> None:
@@ -1512,5 +1785,17 @@ async def setup(bot: commands.Bot) -> None:
     Args:
         bot: The bot instance
     """
-    await bot.add_cog(OpenWebUICog(bot))
-    logger.info("OpenWebUICog added to bot.")
+    try:
+        # Check required libraries are available
+        import aiohttp
+        import json
+        import asyncio
+        
+        await bot.add_cog(OpenWebUICog(bot))
+        logger.info("OpenWebUICog added to bot.")
+    except ImportError as e:
+        logger.critical(f"Missing required library for OpenWebUICog: {e}. Cog will not load.")
+        raise commands.ExtensionFailed("OpenWebUICog", f"Missing required dependency: {e}")
+    except Exception as e:
+        logger.critical(f"Failed to load OpenWebUICog: {e}", exc_info=True)
+        raise commands.ExtensionFailed("OpenWebUICog", f"Initialization error: {e}")

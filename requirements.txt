@@ -1,13 +1,25 @@
-# List python packages to include in your build here
-aiohttp>=3.9.0 # Good practice to keep core libraries updated
-aiosqlite
-discord.py>=2.0.0 # Ensure using discord.py v2+
-python-dotenv
-beautifulsoup4
-lxml
-markdown-it-py
-youtube-search-python>=1.6.6 # Update to a recent version
+# Core dependencies with specific versions
+aiohttp>=3.9.0,<4.0.0
+aiosqlite>=0.18.0,<0.19.0
+discord.py>=2.0.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+
+# Web scraping and content processing
+beautifulsoup4>=4.12.0,<5.0.0
+lxml>=4.9.0,<5.0.0
+markdown-it-py>=3.0.0,<4.0.0
+youtube-search-python>=1.6.6,<2.0.0
+
+# HTTP libraries
 httpx==0.27.2
-requests
-PyNaCl>=1.4.0
-# pillow, customtkinter, ollama seem unrelated to this specific task, keep if needed for other bot features
+requests>=2.31.0,<3.0.0
+
+# Voice support (if needed)
+PyNaCl>=1.4.0,<2.0.0
+
+# Testing (runtime dependencies)
+pytest>=7.0.0
+pytest-asyncio>=0.18.0
+
+# Utilities
+pyyaml>=6.0,<7.0

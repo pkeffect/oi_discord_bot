@@ -6,7 +6,7 @@ from discord.ext.commands import Context
 import logging
 from youtubesearchpython import VideosSearch 
 import asyncio
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 # Set up logger for this cog
 logger = logging.getLogger(__name__)
@@ -130,9 +130,37 @@ class YouTubeCog(commands.Cog, name="YouTube Search"):
 
                 await ctx.send(embed=embed)
 
+            except asyncio.CancelledError:
+                logger.warning(f"YouTube search for '{query}' was cancelled")
+                await ctx.send("The search operation was cancelled.")
+            except discord.HTTPException as e:
+                logger.error(f"Discord HTTP error while sending YouTube results: {e}")
+                await ctx.send(f"Error displaying search results: {e.text}")
             except Exception as e:
                 logger.error(f"Error processing !yt command for query '{query}': {e}", exc_info=True)
-                await ctx.send("An error occurred while searching YouTube. Please try again later.")
+                await ctx.send("An unexpected error occurred while searching YouTube. Please try again later.")
+    
+    @youtube_search.error
+    async def youtube_search_error(self, ctx: Context, error: commands.CommandError):
+        """
+        Error handler specific to the youtube_search command.
+        
+        Args:
+            ctx: The command context
+            error: The error that occurred
+        """
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"Please provide a search query. Usage: `{ctx.prefix}yt <search query>`")
+        elif isinstance(error, commands.CommandInvokeError):
+            original = error.original
+            if isinstance(original, (asyncio.TimeoutError, asyncio.CancelledError)):
+                await ctx.send("The search operation timed out. Please try again later.")
+            else:
+                logger.error(f"Error in YouTube search command: {original}", exc_info=original)
+                await ctx.send(f"An unexpected error occurred: {type(original).__name__}. Please try again later.")
+        else:
+            logger.error(f"Unhandled error in YouTube search command: {error}")
+            await ctx.send("An unknown error occurred. Please try again later.")
 
 
 async def setup(bot: commands.Bot):
@@ -142,5 +170,11 @@ async def setup(bot: commands.Bot):
     Args:
         bot: The bot instance
     """
-    await bot.add_cog(YouTubeCog(bot))
-    logger.info("YouTubeCog added to bot.")
+    try:
+        # Check if required package is installed
+        import youtubesearchpython
+        await bot.add_cog(YouTubeCog(bot))
+        logger.info("YouTubeCog added to bot.")
+    except ImportError:
+        logger.error("Required package 'youtube-search-python' not installed. YouTubeCog will not be loaded.")
+        raise commands.ExtensionFailed("YouTubeCog", "Required package 'youtube-search-python' not installed.")

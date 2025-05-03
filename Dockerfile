@@ -1,21 +1,51 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12-slim
+# Multi-stage build for Monolith Discord Bot
 
-# Set the working directory in the container to /app
+# Stage 1: Build dependencies
+FROM python:3.12-slim AS builder
+
 WORKDIR /app
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements files
+COPY requirements.txt .
 
-# Make port 80 available to the world outside this container
-# EXPOSE 54321  # Replace with your bot's port if it uses one
+# Create a virtual environment and install dependencies
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Define environment variable
+# Stage 2: Runtime image
+FROM python:3.12-slim
+
+# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Run app.py when the container launches
+# Create a non-root user
+RUN adduser --disabled-password --gecos "" appuser
+
+# Set the working directory
+WORKDIR /app
+
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+
+# Copy application code
+COPY . /app/
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/data /app/logs && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Run the application
 CMD ["python", "monolith_discord.py"]

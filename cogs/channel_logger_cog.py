@@ -138,9 +138,24 @@ class ChannelLoggerCog(commands.Cog, name="ChannelLogger"):
                             except (ValueError, TypeError): 
                                 logger.warning(f"Invalid channel ID '{chan_id_str}' for server {server_id}. Skipping.")
                         if valid_channels:
+                            self.server_channel_map[server_id] = valid_channels
+                    else:
+                        logger.warning(f"Invalid channel list format for server {server_id}. Expected list, got {type(channel_list_str)}.")
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid server ID '{server_id_str}'. Skipping.")
 
-
-# ./cogs/channel_logger_cog.py (continued)
+            logger.info(f"Loaded channel logger configuration with {len(self.server_channel_map)} servers.")
+            for server_id, channels in self.server_channel_map.items():
+                logger.info(f"  - Server {server_id}: {len(channels)} channels configured")
+                
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing configuration JSON: {e}. Logging and media download disabled.")
+            self.server_channel_map = {}
+            self.download_media = False
+        except Exception as e:
+            logger.error(f"Unexpected error loading configuration: {e}. Logging and media download disabled.")
+            self.server_channel_map = {}
+            self.download_media = False
 
     def ensure_log_dir(self) -> None:
         """
@@ -204,7 +219,7 @@ class ChannelLoggerCog(commands.Cog, name="ChannelLogger"):
         log_file_path = os.path.join(self.log_directory, f"{guild_id}-{channel_id}.log")
 
         timestamp = message.created_at.replace(tzinfo=datetime.timezone.utc).isoformat()
-        author_name = f"{message.author.name}#{message.author.discriminator}"
+        author_name = f"{message.author.name}#{message.author.discriminator}" if hasattr(message.author, 'discriminator') else message.author.name
         author_id = message.author.id
         message_content = message.content
 
@@ -604,4 +619,4 @@ async def setup(bot: commands.Bot) -> None:
         logger.error(f"Missing required library for ChannelLoggerCog: {e}. Cog may not function correctly.")
 
     await bot.add_cog(ChannelLoggerCog(bot))
-    logger.info("ChannelLogger Cog loaded successfully.")                            
+    logger.info("ChannelLogger Cog loaded successfully.")

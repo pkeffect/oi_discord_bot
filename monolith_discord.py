@@ -9,29 +9,14 @@ from dotenv import load_dotenv
 import pathlib
 import sys
 from typing import Optional
-
-# --- Configuration Loading ---
-load_dotenv()
-TOKEN = os.getenv("DISCORD_TOKEN")
-APP_CONFIG = {
-    # Documentation Cog Settings
-    "DOCS_ZIP_URL": os.getenv("DOCS_ZIP_URL"),
-    "DOCS_BASE_URL": os.getenv("DOCS_BASE_URL"),
-    "DOCS_PATH_IN_ZIP": os.getenv("DOCS_PATH_IN_ZIP", "docs-main/docs"),
-
-    # OpenWebUI Cog Settings
-    "OPENWEBUI_API_URL": os.getenv("OPENWEBUI_API_URL"),
-    "OPENWEBUI_DEFAULT_MODEL": os.getenv("OPENWEBUI_DEFAULT_MODEL"),
-    "OPENWEBUI_API_KEY": os.getenv("OPENWEBUI_API_KEY"),
-    "OPENWEBUI_JWT_TOKEN": os.getenv("OPENWEBUI_JWT_TOKEN"),
-
-    # Ollama Settings
-    "OLLAMA_API_URL": os.getenv("OLLAMA_API_URL"),
-}
+from config_manager import ConfigManager
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s')
 logger = logging.getLogger(__name__)
+
+# --- Load environment variables ---
+load_dotenv()
 
 # --- Bot Definition ---
 intents = discord.Intents.default()
@@ -46,7 +31,15 @@ class MonolithBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         """Initialize the bot with configuration and settings."""
         super().__init__(*args, **kwargs)
-        self.config = APP_CONFIG
+        
+        # Initialize ConfigManager
+        self.config_manager = ConfigManager(self)
+        self.config = self.config_manager.load_config()
+        
+        # Validate critical config
+        if not self.config.get("discord_token"):
+            logger.critical("FATAL: Discord token not found in configuration!")
+            sys.exit(1)
         
     async def setup_hook(self):
         """
@@ -112,8 +105,44 @@ class MonolithBot(commands.Bot):
         )
         logger.info('------ Bot is Ready ------')
 
-# Create bot instance with command prefix and intents
-bot = MonolithBot(command_prefix='!', intents=intents)
+def setup_logging():
+    """Configure logging to both console and file."""
+    # Create logs directory if it doesn't exist
+    logs_dir = pathlib.Path('logs')
+    logs_dir.mkdir(exist_ok=True)
+    
+    # Determine the log filename with timestamp
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = logs_dir / f"bot_{timestamp}.log"
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Console handler with colorized output
+    console_handler = logging.StreamHandler()
+    console_format = '%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s'
+    console_handler.setFormatter(logging.Formatter(console_format))
+    root_logger.addHandler(console_handler)
+    
+    # File handler
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    file_format = '%(asctime)s:%(levelname)-8s:%(name)-15s: %(message)s'
+    file_handler.setFormatter(logging.Formatter(file_format))
+    root_logger.addHandler(file_handler)
+    
+    # Set specific logging levels for noisy modules
+    logging.getLogger('discord').setLevel(logging.WARNING)
+    logging.getLogger('discord.http').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    
+    return log_file
+
+# Call setup_logging at the beginning of main execution
+log_file = setup_logging()
+logger = logging.getLogger(__name__)
+logger.info(f"Logging to console and file: {log_file}")
 
 # --- Global Error Handler ---
 @bot.event
@@ -167,16 +196,14 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    # Validate essential config
-    if not TOKEN:
-        logger.critical("FATAL: DISCORD_TOKEN environment variable not set!")
-        sys.exit(1)
-
+    # Initialize the bot
+    bot = MonolithBot(command_prefix='!', intents=intents)
+    
     # Run the bot
     try:
         logger.info("Starting bot...")
         # Use our root logger config, don't let discord.py interfere
-        bot.run(TOKEN, log_handler=None)
+        bot.run(bot.config.get("discord_token"), log_handler=None)
     except discord.LoginFailure:
         logger.critical("FATAL: Login failed. Check if DISCORD_TOKEN is valid.")
         sys.exit(1)
