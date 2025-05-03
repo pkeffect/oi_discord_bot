@@ -21,10 +21,10 @@ import datetime  # NOTE: This import was missing but is required by the code. Ad
 logger = logging.getLogger(__name__)
 
 # Constants
-API_TIMEOUT_SECONDS = 180  # 3 minutes for potentially long LLM responses
+API_TIMEOUT_SECONDS = 360  # 6 minutes for potentially long LLM responses
 MAX_RESPONSE_LENGTH = 1950  # Discord message limit is 2000, leave a buffer
-CONNECTION_TIMEOUT = 15  # Seconds to wait for initial connection & simple requests
-DIAGNOSTIC_TIMEOUT = 10  # Shorter timeout for diagnostic checks
+CONNECTION_TIMEOUT = 180  # Seconds to wait for initial connection & simple requests
+DIAGNOSTIC_TIMEOUT = 180  # Shorter timeout for diagnostic checks
 SECRET_MASK_PATTERN = r"eyJ|sk-|pk-|xf-|fk-|ak-|mk-|lk-"  # Common API key prefixes
 
 
