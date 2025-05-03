@@ -7,7 +7,7 @@ This document provides instructions for setting up Git properly for this project
 1. **Clone the repository**
 
    ```bash
-   git clone https://github.com/yourusername/dev-environment.git
+   git clone https://github.com/pkeffect/oi_discord_bot.git
    cd dev-environment
    ```
 
